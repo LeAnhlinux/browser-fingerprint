@@ -1,6 +1,6 @@
 import { app, shell, BrowserWindow, dialog, ipcMain, safeStorage } from 'electron'
 import type { IpcMainInvokeEvent, OpenDialogOptions, SaveDialogOptions } from 'electron'
-import { writeFile } from 'fs/promises'
+import { chmod, writeFile } from 'fs/promises'
 import { pathToFileURL } from 'url'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -140,6 +140,8 @@ async function startCore(): Promise<void> {
     if (picked.canceled || !picked.filePath) return { saved: false, count: 0 }
     const { count, json } = await c.exportCookies(profile.id)
     await writeFile(picked.filePath, json, { mode: 0o600 })
+    // mode chỉ có tác dụng khi file mới được tạo; ghi đè file cũ thì siết quyền lại ở đây.
+    await chmod(picked.filePath, 0o600).catch(() => {})
     return { saved: true, count }
   })
 }

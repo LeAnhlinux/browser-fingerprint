@@ -43,14 +43,20 @@ export function CookieDialog({ profile, onClose }: Props): React.JSX.Element {
       return
     }
     setError('')
-    setText(await file.text())
+    try {
+      setText(await file.text())
+    } catch {
+      setError('Không đọc được file')
+    }
   }
 
   const doImport = (): Promise<void> =>
     guarded('import', async () => {
       const r = await api.importCookies(profile.id, text)
       setResult(r)
-      if (r.imported > 0) setText('')
+      if (r.imported > 0 && r.failed === 0 && r.sessionSkipped === 0 && r.errors.length === 0) {
+        setText('')
+      }
     })
 
   const doExport = (): Promise<void> =>
