@@ -157,4 +157,75 @@ describe('Launcher', () => {
     expect(killed).toEqual([]);
     expect(existsSync(join(dir, '.bf-run.json'))).toBe(false);
   });
+
+  it('spawn lỗi (ENOENT) thì báo lỗi nhanh, đóng cầu proxy, không uncaught', async () => {
+    const x = store.createProxy({ protocol: 'http', host: '9.9.9.9', port: 8080, username: null, passwordEncrypted: null });
+    const p = store.createProfile({ name: 'a', proxyId: x.id });
+    const bad = fakeSpawn(false);
+    const impl = ((exe: string, args: string[]) => {
+      const child = new FakeChild();
+      bad.calls.push({ exe, args, child });
+      queueMicrotask(() => child.emit('error', new Error('spawn ENOENT')));
+      return child;
+    }) as unknown as typeof spawn;
+    const l = new Launcher({ ...deps, spawnImpl: impl, cdpTimeoutMs: 5000 });
+    const t0 = Date.now();
+    await expect(l.launch(p.id)).rejects.toThrow(LaunchError);
+    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(bad.calls[0].child.killed).toBe(true);
+    expect(bridgeClosed).toBe(1);
+    expect(l.status(p.id)).toBeNull();
+    expect(existsSync(join(profilesDir, p.id, '.bf-run.json'))).toBe(false);
+  });
+
+  it('lỗi sau khi nhân đã mở thì diệt nhân, đóng cầu, cho phép chạy lại', async () => {
+    const x = store.createProxy({ protocol: 'http', host: '9.9.9.9', port: 8080, username: null, passwordEncrypted: null });
+    const p = store.createProfile({ name: 'a', proxyId: x.id });
+    const l = new Launcher(deps);
+    const real = store.markLaunched.bind(store);
+    store.markLaunched = () => { throw new Error('db hỏng'); };
+    await expect(l.launch(p.id)).rejects.toThrow('db hỏng');
+    expect(sp.calls[0].child.killed).toBe(true);
+    expect(bridgeClosed).toBe(1);
+    expect(l.status(p.id)).toBeNull();
+    expect(existsSync(join(profilesDir, p.id, '.bf-run.json'))).toBe(false);
+    store.markLaunched = real;
+    const info = await l.launch(p.id);
+    expect(l.status(p.id)).toEqual(info);
+    expect(sp.calls.length).toBe(2);
+  });
+
+  it('cleanupStale không diệt khi dòng lệnh thuộc thư mục có cùng tiền tố', async () => {
+    const dir = join(profilesDir, 'old');
+    const sibling = join(profilesDir, 'old2');
+    mkdirSync(dir);
+    writeFileSync(join(dir, '.bf-run.json'), JSON.stringify({ pid: 777 }));
+    const killed: number[] = [];
+    const mk = (cmd: string) => new Launcher({ ...deps, pidCommand: async () => cmd, killPid: (pid) => killed.push(pid) });
+    await mk(`/engine/chrome --user-data-dir=${sibling} --x`).cleanupStale();
+    expect(killed).toEqual([]);
+    writeFileSync(join(dir, '.bf-run.json'), JSON.stringify({ pid: 777 }));
+    await mk(`/engine/chrome --user-data-dir=${dir} --x`).cleanupStale();
+    expect(killed).toEqual([777]);
+  });
+
+  it('hồ sơ có proxy không bao giờ được chạy thiếu --proxy-server', async () => {
+    const x = store.createProxy({ protocol: 'http', host: '9.9.9.9', port: 8080, username: null, passwordEncrypted: null });
+    const p = store.createProfile({ name: 'a', proxyId: x.id });
+    await new Launcher(deps).launch(p.id);
+    expect(sp.calls.every((c) => c.args.some((a) => a.startsWith('--proxy-server=')))).toBe(true);
+    expect(sp.calls.length).toBe(1);
+  });
+
+  it('dọn dẹp khi thoát lỗi thì vẫn phát sự kiện và không làm stop() lỗi', async () => {
+    const x = store.createProxy({ protocol: 'http', host: '9.9.9.9', port: 8080, username: null, passwordEncrypted: null });
+    const p = store.createProfile({ name: 'a', proxyId: x.id });
+    const l = new Launcher({ ...deps, openBridge: async () => ({ url: 'http://127.0.0.1:5555', close: async () => { throw new Error('boom'); } }) });
+    const changes: string[] = [];
+    l.on('change', (id) => changes.push(id));
+    await l.launch(p.id);
+    await l.stop(p.id);
+    expect(l.status(p.id)).toBeNull();
+    expect(changes.length).toBe(2);
+  });
 });

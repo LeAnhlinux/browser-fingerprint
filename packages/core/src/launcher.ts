@@ -75,6 +75,11 @@ export async function pidCommand(pid: number): Promise<string | null> {
   }
 }
 
+function commandUsesDir(cmd: string, dir: string): boolean {
+  const escaped = dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`--user-data-dir=\"?${escaped}\"?(?:\\s|$)`).test(cmd);
+}
+
 async function waitForCdpFile(dir: string, timeoutMs: number, signal: AbortSignal): Promise<{ port: number; path: string }> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline && !signal.aborted) {
@@ -146,9 +151,20 @@ export class Launcher extends EventEmitter {
       }
       child = (this.deps.spawnImpl ?? spawn)(exe, args, { stdio: 'ignore' });
       const spawned = child;
-      const exit = new Promise<number | null>((resolve) => spawned.once('exit', (code) => resolve(code)));
+      let exited = false;
+      const exit = new Promise<number | null>((resolve) =>
+        spawned.once('exit', (code) => {
+          exited = true;
+          resolve(code);
+        }),
+      );
+      // Luôn giữ một listener 'error' để lỗi spawn (ENOENT/EACCES) không thành uncaught exception.
+      const spawnFailed = new Promise<never>((_, reject) =>
+        spawned.on('error', (e) => reject(new LaunchError(`Không chạy được nhân trình duyệt: ${e.message}`))),
+      );
       const cdp = await Promise.race([
         waitForCdpFile(dir, this.deps.cdpTimeoutMs ?? 20_000, abort.signal),
+        spawnFailed,
         exit.then((code) => {
           throw new LaunchError(`Nhân thoát ngay khi khởi động (mã ${code})`);
         }),
@@ -160,22 +176,34 @@ export class Launcher extends EventEmitter {
         cdpUrl: `ws://127.0.0.1:${cdp.port}${cdp.path}`,
         startedAt: Date.now(),
       };
-      const liveBridge = bridge;
-      const cleanedUp = exit.then(async (code) => {
-        this.runs.delete(profileId);
-        this.exitCodes.set(profileId, code);
-        await liveBridge?.close().catch(() => {});
-        await rm(join(dir, RUN_FILE), { force: true });
-        this.emit('change', profileId);
-      });
-      this.runs.set(profileId, { child: spawned, info, cleanedUp });
+      // Mọi bước có thể lỗi phải xong trước khi đăng ký chạy, để catch dọn đúng.
       await writeFile(join(dir, RUN_FILE), JSON.stringify({ pid: info.pid }));
       this.deps.store.markLaunched(profileId, this.deps.engine.release().version);
+      if (exited) throw new LaunchError('Nhân đã thoát trong lúc khởi động');
+      const liveBridge = bridge;
+      const cleanedUp = exit.then(async (code) => {
+        try {
+          this.exitCodes.set(profileId, code);
+          await liveBridge?.close().catch(() => {});
+          await rm(join(dir, RUN_FILE), { force: true });
+        } catch {
+          // lỗi dọn dẹp không được làm hỏng luồng dừng
+        } finally {
+          if (this.runs.get(profileId)?.child === spawned) this.runs.delete(profileId);
+          this.emit('change', profileId);
+        }
+      });
+      this.runs.set(profileId, { child: spawned, info, cleanedUp });
       this.emit('change', profileId);
       return info;
     } catch (err) {
-      if (child && !this.runs.has(profileId)) child.kill();
+      try {
+        child?.kill();
+      } catch {
+        // nhân có thể đã thoát
+      }
       await bridge?.close().catch(() => {});
+      await rm(join(this.deps.profilesDir, profileId, RUN_FILE), { force: true }).catch(() => {});
       throw err;
     } finally {
       abort.abort();
@@ -215,7 +243,7 @@ export class Launcher extends EventEmitter {
       }
       if (pid > 0) {
         const cmd = await (this.deps.pidCommand ?? pidCommand)(pid);
-        if (cmd?.includes(dir)) {
+        if (cmd && commandUsesDir(cmd, dir)) {
           try {
             (this.deps.killPid ?? ((p: number) => process.kill(p)))(pid);
           } catch {
