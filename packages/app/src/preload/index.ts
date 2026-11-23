@@ -4,6 +4,10 @@ const bf = {
   call: (method: string, ...args: unknown[]): Promise<unknown> =>
     ipcRenderer.invoke('bf:call', method, args),
   installEngine: (): Promise<void> => ipcRenderer.invoke('bf:installEngine'),
+  addExtension: (kind: 'folder' | 'file'): Promise<unknown> =>
+    ipcRenderer.invoke('bf:addExtension', kind),
+  exportCookies: (profileId: string): Promise<unknown> =>
+    ipcRenderer.invoke('bf:exportCookies', profileId),
   onChange: (cb: () => void): (() => void) => {
     const listener = (): void => cb()
     ipcRenderer.on('bf:change', listener)

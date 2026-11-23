@@ -1,4 +1,6 @@
 import { app, shell, BrowserWindow, dialog, ipcMain, safeStorage } from 'electron'
+import type { IpcMainInvokeEvent, OpenDialogOptions, SaveDialogOptions } from 'electron'
+import { writeFile } from 'fs/promises'
 import { pathToFileURL } from 'url'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -6,17 +8,39 @@ import icon from '../../resources/icon.png?asset'
 import { Core, type SecretBox } from '@bf/core'
 
 const METHODS = new Set([
-  'info', 'listProfiles', 'createProfile', 'updateProfile', 'deleteProfile',
-  'listGroups', 'createGroup', 'renameGroup', 'deleteGroup',
-  'listProxies', 'createProxy', 'updateProxy', 'deleteProxy',
-  'importProxies', 'checkProxy', 'checkProxies',
-  'createProfilesBulk', 'updateProfilesBulk', 'assignUnusedProxies', 'applyProxyLocale',
-  'launch', 'stop',
+  'info',
+  'listProfiles',
+  'createProfile',
+  'updateProfile',
+  'deleteProfile',
+  'listGroups',
+  'createGroup',
+  'renameGroup',
+  'deleteGroup',
+  'listProxies',
+  'createProxy',
+  'updateProxy',
+  'deleteProxy',
+  'importProxies',
+  'checkProxy',
+  'checkProxies',
+  'createProfilesBulk',
+  'updateProfilesBulk',
+  'assignUnusedProxies',
+  'applyProxyLocale',
+  'importCookies',
+  'listExtensions',
+  'deleteExtension',
+  'setProfileExtensions',
+  'setGroupExtensions',
+  'listGroupExtensions',
+  'launch',
+  'stop'
 ])
 
 const secrets: SecretBox = {
   encrypt: (plain) => safeStorage.encryptString(plain).toString('base64'),
-  decrypt: (cipher) => safeStorage.decryptString(Buffer.from(cipher, 'base64')),
+  decrypt: (cipher) => safeStorage.decryptString(Buffer.from(cipher, 'base64'))
 }
 
 app.setName('Browser Fingerprint')
@@ -32,9 +56,22 @@ function isOwnUrl(raw: string): boolean {
     if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
       return url.origin === new URL(process.env['ELECTRON_RENDERER_URL']).origin
     }
-    return url.protocol === 'file:' && url.pathname === pathToFileURL(join(__dirname, '../renderer/index.html')).pathname
+    return (
+      url.protocol === 'file:' &&
+      url.pathname === pathToFileURL(join(__dirname, '../renderer/index.html')).pathname
+    )
   } catch {
     return false
+  }
+}
+
+function assertOwnSender(event: IpcMainInvokeEvent): void {
+  if (
+    !event.senderFrame ||
+    event.senderFrame !== event.sender.mainFrame ||
+    !isOwnUrl(event.senderFrame.url)
+  ) {
+    throw new Error('Nguồn gọi không hợp lệ')
   }
 }
 
@@ -53,20 +90,57 @@ async function startCore(): Promise<void> {
   core = c
   c.on('change', () => broadcast('bf:change'))
   ipcMain.handle('bf:call', async (event, method: string, args: unknown[]) => {
-    if (!event.senderFrame || event.senderFrame !== event.sender.mainFrame || !isOwnUrl(event.senderFrame.url)) {
-      throw new Error('Nguồn gọi không hợp lệ')
-    }
+    assertOwnSender(event)
     if (typeof method !== 'string' || !Array.isArray(args)) throw new Error('Tham số không hợp lệ')
     if (!METHODS.has(method)) throw new Error(`Phương thức không hợp lệ: ${method}`)
     const fn = (c as unknown as Record<string, (...a: unknown[]) => unknown>)[method]
     return fn.apply(c, args)
   })
   ipcMain.handle('bf:installEngine', async (event) => {
-    if (!event.senderFrame || event.senderFrame !== event.sender.mainFrame || !isOwnUrl(event.senderFrame.url)) {
-      throw new Error('Nguồn gọi không hợp lệ')
-    }
+    assertOwnSender(event)
     await c.installEngine((received, total) => broadcast('bf:engineProgress', received, total))
     broadcast('bf:change')
+  })
+
+  // Đường dẫn file luôn đến từ hộp thoại của hệ điều hành, không bao giờ từ renderer.
+  ipcMain.handle('bf:addExtension', async (event, kind: unknown) => {
+    assertOwnSender(event)
+    if (kind !== 'folder' && kind !== 'file') throw new Error('Tham số không hợp lệ')
+    const options: OpenDialogOptions =
+      kind === 'folder'
+        ? { title: 'Chọn thư mục extension đã giải nén', properties: ['openDirectory'] }
+        : {
+            title: 'Chọn file extension',
+            properties: ['openFile'],
+            filters: [{ name: 'Extension', extensions: ['crx', 'zip'] }]
+          }
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const picked = win
+      ? await dialog.showOpenDialog(win, options)
+      : await dialog.showOpenDialog(options)
+    if (picked.canceled || picked.filePaths.length === 0) return null
+    return c.addExtension(picked.filePaths[0])
+  })
+
+  // Cookie đi thẳng từ lõi ra file người dùng chọn, không qua renderer.
+  ipcMain.handle('bf:exportCookies', async (event, profileId: unknown) => {
+    assertOwnSender(event)
+    const profile = typeof profileId === 'string' ? c.store.getProfile(profileId) : null
+    if (!profile) throw new Error('Không tìm thấy hồ sơ')
+    const safeName = profile.name.replace(/[^\p{L}\p{N}._-]+/gu, '_').slice(0, 50) || 'ho-so'
+    const options: SaveDialogOptions = {
+      title: 'Lưu cookie',
+      defaultPath: `cookies-${safeName}.json`,
+      filters: [{ name: 'JSON', extensions: ['json'] }]
+    }
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const picked = win
+      ? await dialog.showSaveDialog(win, options)
+      : await dialog.showSaveDialog(options)
+    if (picked.canceled || !picked.filePath) return { saved: false, count: 0 }
+    const { count, json } = await c.exportCookies(profile.id)
+    await writeFile(picked.filePath, json, { mode: 0o600 })
+    return { saved: true, count }
   })
 }
 
@@ -127,7 +201,10 @@ app.whenReady().then(async () => {
   try {
     await startCore()
   } catch (e) {
-    dialog.showErrorBox('Không thể khởi động', `Không khởi động được lõi ứng dụng: ${e instanceof Error ? e.message : String(e)}`)
+    dialog.showErrorBox(
+      'Không thể khởi động',
+      `Không khởi động được lõi ứng dụng: ${e instanceof Error ? e.message : String(e)}`
+    )
     app.quit()
     return
   }
@@ -154,7 +231,10 @@ app.on('before-quit', (event) => {
   if (quitting || !core) return
   event.preventDefault()
   quitting = true
-  void core.shutdown().catch(() => undefined).finally(() => app.quit())
+  void core
+    .shutdown()
+    .catch(() => undefined)
+    .finally(() => app.quit())
 })
 
 // In this file you can include the rest of your app's specific main process
