@@ -2,10 +2,8 @@
   "name": "@bf/app",
   "version": "1.0.0",
   "productName": "Browser Fingerprint",
-  "description": "An Electron application with React and TypeScript",
+  "description": "Trình quản lý hồ sơ trình duyệt tách biệt (antidetect) dùng cá nhân",
   "main": "./out/main/index.js",
-  "author": "example.com",
-  "homepage": "https://electron-vite.org",
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",

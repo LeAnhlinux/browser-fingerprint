@@ -37,14 +37,20 @@ export function SettingsPanel({ groups, proxies, run, error, onClose }: Props): 
     if (name && name !== g.name) await run(() => api.renameGroup(g.id, name))
   }
 
-  const proxyValid = host.trim() !== '' && Number(port) > 0 && Number(port) < 65536
+  const portNum = Number(port)
+  const proxyValid =
+    host.trim() !== '' &&
+    /^\d+$/.test(port.trim()) &&
+    Number.isInteger(portNum) &&
+    portNum >= 1 &&
+    portNum <= 65535
   const addProxy = async (): Promise<void> => {
     if (!proxyValid) return
     const ok = await run(() =>
       api.createProxy({
         protocol,
         host: host.trim(),
-        port: Number(port),
+        port: portNum,
         username: username.trim() || null,
         password: password || null
       })

@@ -16,6 +16,7 @@ export default function App(): React.JSX.Element {
   const [editing, setEditing] = useState<ProfileView | 'new' | null>(null)
   const [showSettings, setShowSettings] = useState(false)
   const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
 
   const reload = useCallback(async () => {
     const filter = {
@@ -86,11 +87,17 @@ export default function App(): React.JSX.Element {
   if (!info.engineInstalled) return <EngineGate info={info} onInstalled={() => void reload()} />
 
   const save = async (input: NewProfile): Promise<void> => {
+    if (saving) return
     const target = editing
-    const ok = await run(() =>
-      target && target !== 'new' ? api.updateProfile(target.id, input) : api.createProfile(input)
-    )
-    if (ok) setEditing(null)
+    setSaving(true)
+    try {
+      const ok = await run(() =>
+        target && target !== 'new' ? api.updateProfile(target.id, input) : api.createProfile(input)
+      )
+      if (ok) setEditing(null)
+    } finally {
+      setSaving(false)
+    }
   }
 
   const remove = (p: ProfileView): void => {
@@ -161,6 +168,7 @@ export default function App(): React.JSX.Element {
           hostPlatform={info.hostPlatform}
           onSave={(input) => void save(input)}
           error={error}
+          saving={saving}
           onCancel={() => {
             setEditing(null)
             setError('')

@@ -7,6 +7,7 @@ interface Props {
   proxies: ProxyView[]
   hostPlatform: Platform
   error: string
+  saving: boolean
   onSave: (input: NewProfile) => void
   onCancel: () => void
 }
@@ -17,6 +18,7 @@ export function ProfileForm({
   proxies,
   hostPlatform,
   error,
+  saving,
   onSave,
   onCancel
 }: Props): React.JSX.Element {
@@ -52,7 +54,11 @@ export function ProfileForm({
   }
 
   const valid =
-    name.trim() !== '' && lang.trim() !== '' && acceptLang.trim() !== '' && timezone.trim() !== ''
+    !saving &&
+    name.trim() !== '' &&
+    lang.trim() !== '' &&
+    acceptLang.trim() !== '' &&
+    timezone.trim() !== ''
 
   return (
     <div className="overlay">
@@ -145,7 +151,7 @@ export function ProfileForm({
         <div className="dialog-actions">
           <button onClick={onCancel}>Huỷ</button>
           <button className="primary" disabled={!valid} onClick={submit}>
-            Lưu
+            {saving ? 'Đang lưu…' : 'Lưu'}
           </button>
         </div>
       </div>
