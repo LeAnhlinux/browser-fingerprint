@@ -4,3 +4,4 @@ out/
 .engines/
 *.tsbuildinfo
 .DS_Store
+release/
