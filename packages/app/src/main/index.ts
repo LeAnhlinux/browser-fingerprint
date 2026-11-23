@@ -258,6 +258,9 @@ app.whenReady().then(async () => {
     return
   }
 
+  // Khi chạy dev, Dock hiện icon Electron mặc định; bản đóng gói lấy icon từ build/icon.icns.
+  if (process.platform === 'darwin' && !app.isPackaged) app.dock?.setIcon(icon)
+
   createWindow()
 
   app.on('activate', function () {
