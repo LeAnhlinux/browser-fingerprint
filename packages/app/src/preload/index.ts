@@ -8,6 +8,8 @@ const bf = {
     ipcRenderer.invoke('bf:addExtension', kind),
   exportCookies: (profileId: string): Promise<unknown> =>
     ipcRenderer.invoke('bf:exportCookies', profileId),
+  apiStatus: (): Promise<unknown> => ipcRenderer.invoke('bf:apiStatus'),
+  revealApiToken: (): Promise<unknown> => ipcRenderer.invoke('bf:revealApiToken'),
   onChange: (cb: () => void): (() => void) => {
     const listener = (): void => cb()
     ipcRenderer.on('bf:change', listener)

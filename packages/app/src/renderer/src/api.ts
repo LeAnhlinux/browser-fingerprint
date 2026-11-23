@@ -21,6 +21,13 @@ import type {
 const call = <T>(method: string, ...args: unknown[]): Promise<T> =>
   window.bf.call(method, ...args) as Promise<T>
 
+export interface ApiStatus {
+  enabled: boolean
+  running: boolean
+  port: number
+  error: string | null
+}
+
 export const api = {
   info: () => call<CoreInfo>('info'),
   installEngine: () => window.bf.installEngine(),
@@ -59,6 +66,8 @@ export const api = {
   ) => call<number>('updateProfilesBulk', ids, patch),
   assignUnusedProxies: (ids: string[]) => call<number>('assignUnusedProxies', ids),
   applyProxyLocale: (ids: string[]) => call<LocaleApplyResult>('applyProxyLocale', ids),
+  apiStatus: () => window.bf.apiStatus() as Promise<ApiStatus>,
+  revealApiToken: () => window.bf.revealApiToken() as Promise<boolean>,
   launch: (id: string) => call<RunInfo>('launch', id),
   stop: (id: string) => call<void>('stop', id)
 }

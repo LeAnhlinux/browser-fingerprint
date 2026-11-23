@@ -6,6 +6,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { Core, type SecretBox } from '@bf/core'
+import { DEFAULT_PORT, loadOrCreateToken, startApiServer, tokenPath, type ApiServer } from '@bf/api'
 
 const METHODS = new Set([
   'info',
@@ -50,6 +51,16 @@ const APP_ID = 'local.browserfingerprint.app'
 let core: Core | undefined
 let quitting = false
 
+interface ApiStatus {
+  enabled: boolean
+  running: boolean
+  port: number
+  error: string | null
+}
+
+let apiServer: ApiServer | undefined
+let apiStatus: ApiStatus = { enabled: false, running: false, port: DEFAULT_PORT, error: null }
+
 function isOwnUrl(raw: string): boolean {
   try {
     const url = new URL(raw)
@@ -77,6 +88,23 @@ function assertOwnSender(event: IpcMainInvokeEvent): void {
 
 function broadcast(channel: string, ...args: unknown[]): void {
   for (const w of BrowserWindow.getAllWindows()) w.webContents.send(channel, ...args)
+}
+
+// API cục bộ là phần thêm: hỏng thì app vẫn chạy và giao diện báo lý do.
+async function startApi(c: Core): Promise<void> {
+  if (process.env.BF_API === '0') return
+  const raw = process.env.BF_API_PORT
+  const port = raw ? Number(raw) : DEFAULT_PORT
+  apiStatus = { enabled: true, running: false, port, error: null }
+  try {
+    if (!Number.isInteger(port) || port < 1 || port > 65535)
+      throw new Error('BF_API_PORT không hợp lệ')
+    const token = loadOrCreateToken(tokenPath(app.getPath('userData')))
+    apiServer = await startApiServer({ core: c, token, port })
+    apiStatus = { ...apiStatus, running: true, port: apiServer.port }
+  } catch (e) {
+    apiStatus = { ...apiStatus, error: e instanceof Error ? e.message : 'Không khởi động được API' }
+  }
 }
 
 async function startCore(): Promise<void> {
@@ -144,6 +172,18 @@ async function startCore(): Promise<void> {
     await chmod(picked.filePath, 0o600).catch(() => {})
     return { saved: true, count }
   })
+
+  ipcMain.handle('bf:apiStatus', (event) => {
+    assertOwnSender(event)
+    return apiStatus
+  })
+  ipcMain.handle('bf:revealApiToken', (event) => {
+    assertOwnSender(event)
+    shell.showItemInFolder(tokenPath(app.getPath('userData')))
+    return true
+  })
+
+  await startApi(c)
 }
 
 function createWindow(): void {
@@ -233,8 +273,10 @@ app.on('before-quit', (event) => {
   if (quitting || !core) return
   event.preventDefault()
   quitting = true
-  void core
-    .shutdown()
+  const c = core
+  void (apiServer ? apiServer.close() : Promise.resolve())
+    .catch(() => undefined)
+    .then(() => c.shutdown())
     .catch(() => undefined)
     .finally(() => app.quit())
 })

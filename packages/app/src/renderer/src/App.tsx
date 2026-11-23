@@ -7,7 +7,7 @@ import { EngineGate } from './EngineGate'
 import { ProfileForm } from './ProfileForm'
 import { ProfileList } from './ProfileList'
 import { SettingsPanel } from './SettingsPanel'
-import { api, cleanError } from './api'
+import { api, cleanError, type ApiStatus } from './api'
 
 export default function App(): React.JSX.Element {
   const [info, setInfo] = useState<CoreInfo | null>(null)
@@ -26,6 +26,7 @@ export default function App(): React.JSX.Element {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [showBulkCreate, setShowBulkCreate] = useState(false)
   const [cookieFor, setCookieFor] = useState<string | null>(null)
+  const [apiInfo, setApiInfo] = useState<ApiStatus | null>(null)
 
   const reload = useCallback(async () => {
     const filter = {
@@ -69,6 +70,13 @@ export default function App(): React.JSX.Element {
     void reload()
     return window.bf.onChange(() => void reload())
   }, [reload])
+
+  useEffect(() => {
+    void api
+      .apiStatus()
+      .then(setApiInfo)
+      .catch(() => setApiInfo(null))
+  }, [])
 
   const run = useCallback(
     async (fn: () => Promise<unknown>): Promise<boolean> => {
@@ -223,6 +231,17 @@ export default function App(): React.JSX.Element {
         }
       />
       <p className="muted">Nhân: fingerprint-chromium {info.engineVersion}</p>
+      {apiInfo &&
+        (apiInfo.running ? (
+          <p className="muted">
+            API cục bộ: http://127.0.0.1:{apiInfo.port} ·{' '}
+            <button onClick={() => void api.revealApiToken()}>Hiện file token</button>
+          </p>
+        ) : apiInfo.enabled ? (
+          <p className="warn">API cục bộ không chạy: {apiInfo.error ?? 'không rõ lý do'}</p>
+        ) : (
+          <p className="muted">API cục bộ: đã tắt (BF_API=0)</p>
+        ))}
       {editing && (
         <ProfileForm
           profile={editing === 'new' ? null : editing}

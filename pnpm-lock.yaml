@@ -26,6 +26,9 @@ importers:
 
   packages/app:
     dependencies:
+      '@bf/api':
+        specifier: workspace:*
+        version: link:../api
       '@bf/core':
         specifier: workspace:*
         version: link:../core
