@@ -4,6 +4,10 @@ import { dirname, join, resolve } from 'node:path';
 import { EngineManager, type EngineOptions } from './engine';
 import { hostPlatform } from './fingerprint';
 import { Launcher, type LauncherDeps, type RunInfo } from './launcher';
+import { localeForCountry } from './locale';
+import type { Upstream } from './proxy-bridge';
+import { type ProxyCheckResult, checkProxy as runProxyCheck } from './proxy-checker';
+import { parseProxyList } from './proxy-parse';
 import { type NewProfile, type ProfileFilter, type ProfilePatch, ProfileStore, type ProxyRowPatch } from './store';
 import type { Group, Platform, Profile, Proxy, ProxyProtocol, SecretBox } from './types';
 
@@ -12,6 +16,16 @@ export type ProxyView = Omit<Proxy, 'passwordEncrypted'> & { hasPassword: boolea
 export type NewProxy = { protocol: ProxyProtocol; host: string; port: number; username?: string | null; password?: string | null };
 export type ProxyPatch = Partial<NewProxy>;
 export type CoreInfo = { engineInstalled: boolean; engineVersion: string; hostPlatform: Platform };
+export type ProxyImportResult = { created: ProxyView[]; skipped: number; errors: { line: number; reason: string }[] };
+export type BulkCreateInput = {
+  count: number;
+  namePattern: string;
+  startIndex?: number;
+  groupId?: string | null;
+  proxyMode?: 'none' | 'unused';
+  applyLocale?: boolean;
+};
+export type LocaleApplyResult = { updated: number; skipped: { id: string; name: string; reason: string }[] };
 
 export interface CoreOptions {
   dataDir: string;
@@ -19,6 +33,8 @@ export interface CoreOptions {
   enginesDir?: string;
   engineOptions?: Partial<EngineOptions>;
   launcherOverrides?: Partial<LauncherDeps>;
+  lookupUrl?: string;
+  proxyCheck?: (u: Upstream) => Promise<ProxyCheckResult>;
 }
 
 // Quy tắc host (giữ đơn giản): sau khi cắt khoảng trắng phải không rỗng và là tên miền
@@ -58,12 +74,25 @@ function normalizeRefs<T extends { proxyId?: string | null; groupId?: string | n
   return next;
 }
 
+const MAX_BULK = 500;
+const CHECK_CONCURRENCY = 5;
+
+function proxyKey(p: { protocol: string; host: string; port: number; username: string | null }): string {
+  return `${p.protocol}|${p.host.toLowerCase()}|${p.port}|${p.username ?? ''}`;
+}
+
+function localeFromProxy(proxy: Proxy): { timezone: string; lang?: string; acceptLang?: string } | null {
+  if (proxy.lastStatus !== 'ok' || !proxy.lastTimezone) return null;
+  return { timezone: proxy.lastTimezone, ...(localeForCountry(proxy.lastCountry) ?? {}) };
+}
+
 export class Core extends EventEmitter {
   readonly store: ProfileStore;
   readonly engine: EngineManager;
   readonly launcher: Launcher;
   private profilesDir: string;
   private secrets: SecretBox;
+  private proxyCheck: (u: Upstream) => Promise<ProxyCheckResult>;
 
   constructor(opts: CoreOptions) {
     super();
@@ -71,6 +100,7 @@ export class Core extends EventEmitter {
     this.profilesDir = join(opts.dataDir, 'profiles');
     mkdirSync(this.profilesDir, { recursive: true });
     this.secrets = opts.secrets;
+    this.proxyCheck = opts.proxyCheck ?? ((u) => runProxyCheck(u, { lookupUrl: opts.lookupUrl }));
     this.store = new ProfileStore(join(opts.dataDir, 'db.sqlite'));
     this.engine = new EngineManager({ enginesDir: opts.enginesDir ?? join(opts.dataDir, 'engines'), ...opts.engineOptions });
     this.launcher = new Launcher({
@@ -214,6 +244,150 @@ export class Core extends EventEmitter {
       throw new Error(`Proxy đang được dùng bởi hồ sơ: ${users.map((p) => p.name).join(', ')}. Hãy đổi proxy của các hồ sơ đó trước.`);
     }
     this.store.deleteProxy(id);
+  }
+
+  importProxies(text: string, defaultProtocol: ProxyProtocol = 'http'): ProxyImportResult {
+    if (typeof text !== 'string') throw new Error('Danh sách proxy không hợp lệ');
+    const parsed = parseProxyList(text, checkProtocol(defaultProtocol));
+    const errors = [...parsed.errors];
+    const seen = new Set(this.store.listProxies().map(proxyKey));
+    const created: ProxyView[] = [];
+    let skipped = 0;
+    this.store.transaction(() => {
+      for (const item of parsed.proxies) {
+        if (seen.has(proxyKey(item))) {
+          skipped++;
+          continue;
+        }
+        try {
+          created.push(this.createProxy(item));
+          seen.add(proxyKey(item));
+        } catch (err) {
+          errors.push({ line: item.line, reason: (err as Error).message });
+        }
+      }
+    });
+    errors.sort((a, b) => a.line - b.line);
+    if (created.length > 0) this.emit('change', '');
+    return { created, skipped, errors };
+  }
+
+  async checkProxy(id: string): Promise<ProxyView> {
+    const proxy = this.store.getProxy(id);
+    if (!proxy) throw new Error('Không tìm thấy proxy');
+    const result = await this.proxyCheck({
+      protocol: proxy.protocol,
+      host: proxy.host,
+      port: proxy.port,
+      username: proxy.username,
+      password: proxy.passwordEncrypted ? this.secrets.decrypt(proxy.passwordEncrypted) : null,
+    });
+    if (!this.store.getProxy(id)) throw new Error('Không tìm thấy proxy');
+    this.store.saveProxyCheck(id, result);
+    this.emit('change', id);
+    return toProxyView(this.store.getProxy(id)!);
+  }
+
+  async checkProxies(ids: string[]): Promise<void> {
+    if (!Array.isArray(ids)) throw new Error('Danh sách proxy không hợp lệ');
+    const queue = ids.filter((id) => typeof id === 'string');
+    const worker = async (): Promise<void> => {
+      for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
+        await this.checkProxy(id).catch(() => {});
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(CHECK_CONCURRENCY, queue.length) }, worker));
+  }
+
+  private unusedProxies(): Proxy[] {
+    const used = new Set(this.store.listProfiles().map((p) => p.proxyId));
+    return this.store.listProxies().filter((x) => !used.has(x.id));
+  }
+
+  private profilesByIds(ids: unknown): Profile[] {
+    if (!Array.isArray(ids) || ids.length === 0) throw new Error('Chưa chọn hồ sơ nào');
+    if (ids.length > 1000) throw new Error('Chọn tối đa 1000 hồ sơ một lần');
+    return ids.map((id) => {
+      const profile = typeof id === 'string' ? this.store.getProfile(id) : null;
+      if (!profile) throw new Error('Không tìm thấy hồ sơ');
+      return profile;
+    });
+  }
+
+  createProfilesBulk(input: BulkCreateInput): Profile[] {
+    const count = input.count;
+    if (!Number.isInteger(count) || count < 1 || count > MAX_BULK) throw new Error(`Số lượng phải từ 1 đến ${MAX_BULK}`);
+    const start = input.startIndex ?? 1;
+    if (!Number.isInteger(start) || start < 0) throw new Error('Số bắt đầu không hợp lệ');
+    const pattern = this.cleanName(input.namePattern);
+    const groupId = input.groupId || null;
+    this.checkProfileRefs({ groupId });
+    const mode = input.proxyMode ?? 'none';
+    if (mode !== 'none' && mode !== 'unused') throw new Error('Cách gán proxy không hợp lệ');
+    const pool = mode === 'unused' ? this.unusedProxies() : [];
+    if (mode === 'unused' && pool.length < count) throw new Error(`Không đủ proxy chưa dùng: cần ${count}, có ${pool.length}`);
+    const width = Math.max(2, String(start + count - 1).length);
+    const made = this.store.transaction(() =>
+      Array.from({ length: count }, (_, i) => {
+        const n = String(start + i).padStart(width, '0');
+        const name = pattern.includes('{n}') ? pattern.replaceAll('{n}', n) : `${pattern}-${n}`;
+        const proxy = mode === 'unused' ? pool[i] : null;
+        const locale = input.applyLocale && proxy ? localeFromProxy(proxy) : null;
+        return this.store.createProfile({ name, groupId, proxyId: proxy?.id ?? null, ...(locale ?? {}) });
+      }),
+    );
+    this.emit('change', '');
+    return made;
+  }
+
+  updateProfilesBulk(ids: string[], patch: { groupId?: string | null; proxyId?: string | null }): number {
+    const profiles = this.profilesByIds(ids);
+    // Danh sách trường cho phép: chỉ nhóm và proxy.
+    const next: { groupId?: string | null; proxyId?: string | null } = {};
+    if (patch && patch.groupId !== undefined) next.groupId = patch.groupId || null;
+    if (patch && patch.proxyId !== undefined) next.proxyId = patch.proxyId || null;
+    if (Object.keys(next).length === 0) throw new Error('Chưa chọn thay đổi nào');
+    this.checkProfileRefs(next);
+    this.store.transaction(() => {
+      for (const p of profiles) this.store.updateProfile(p.id, next);
+    });
+    this.emit('change', '');
+    return profiles.length;
+  }
+
+  assignUnusedProxies(ids: string[]): number {
+    const profiles = this.profilesByIds(ids);
+    const pool = this.unusedProxies();
+    if (pool.length < profiles.length) throw new Error(`Không đủ proxy chưa dùng: cần ${profiles.length}, có ${pool.length}`);
+    this.store.transaction(() => {
+      profiles.forEach((p, i) => this.store.updateProfile(p.id, { proxyId: pool[i].id }));
+    });
+    this.emit('change', '');
+    return profiles.length;
+  }
+
+  applyProxyLocale(ids: string[]): LocaleApplyResult {
+    const profiles = this.profilesByIds(ids);
+    const skipped: LocaleApplyResult['skipped'] = [];
+    const updates: { id: string; patch: ProfilePatch }[] = [];
+    for (const p of profiles) {
+      const proxy = p.proxyId ? this.store.getProxy(p.proxyId) : null;
+      if (!proxy) {
+        skipped.push({ id: p.id, name: p.name, reason: 'Không có proxy' });
+        continue;
+      }
+      const locale = localeFromProxy(proxy);
+      if (!locale) {
+        skipped.push({ id: p.id, name: p.name, reason: 'Proxy chưa kiểm tra thành công' });
+        continue;
+      }
+      updates.push({ id: p.id, patch: locale });
+    }
+    this.store.transaction(() => {
+      for (const u of updates) this.store.updateProfile(u.id, u.patch);
+    });
+    if (updates.length > 0) this.emit('change', '');
+    return { updated: updates.length, skipped };
   }
 
   launch(id: string): Promise<RunInfo> {
