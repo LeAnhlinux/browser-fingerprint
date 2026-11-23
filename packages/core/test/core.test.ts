@@ -267,4 +267,88 @@ describe('Core', () => {
     core.updateProfile(p.id, { proxyId: x.id });
     expect(core.updateProfile(p.id, { proxyId: '' }).proxyId).toBeNull();
   });
+
+  it('từ chối trường hồ sơ không hợp lệ khi tạo và khi sửa', () => {
+    const bad: [Record<string, unknown>, string][] = [
+      [{ platform: 'android' }, 'Hệ điều hành không hợp lệ'],
+      [{ platform: null }, 'Hệ điều hành không hợp lệ'],
+      [{ platformVersion: '10 --no-sandbox' }, 'Phiên bản hệ điều hành không hợp lệ'],
+      [{ platformVersion: 15 }, 'Phiên bản hệ điều hành không hợp lệ'],
+      [{ brand: 'Chrome --flag' }, 'Tên trình duyệt không hợp lệ'],
+      [{ brand: '' }, 'Tên trình duyệt không hợp lệ'],
+      [{ brand: 7 }, 'Tên trình duyệt không hợp lệ'],
+      [{ hardwareConcurrency: 0 }, 'Số nhân CPU phải là số nguyên từ 1 đến 128'],
+      [{ hardwareConcurrency: 2.5 }, 'Số nhân CPU phải là số nguyên từ 1 đến 128'],
+      [{ hardwareConcurrency: '8' }, 'Số nhân CPU phải là số nguyên từ 1 đến 128'],
+      [{ notes: 5 }, 'Ghi chú không hợp lệ'],
+      [{ notes: 'x'.repeat(5001) }, 'Ghi chú tối đa 5000 ký tự'],
+    ];
+    const p = core.createProfile({ name: 'gốc' });
+    for (const [fields, message] of bad) {
+      expect(() => core.createProfile({ name: 'x', ...fields } as never), JSON.stringify(fields)).toThrow(message);
+      expect(() => core.updateProfile(p.id, fields as never), JSON.stringify(fields)).toThrow(message);
+    }
+    expect(core.listProfiles().map((x) => x.name)).toEqual(['gốc']);
+  });
+
+  it('nhận trường hồ sơ hợp lệ; phiên bản hệ điều hành rỗng thành null', () => {
+    const p = core.createProfile({ name: 'a', platform: 'windows', platformVersion: '10.0.19045', brand: 'Edge', hardwareConcurrency: 8, notes: 'ghi chú' });
+    expect(p).toMatchObject({ platform: 'windows', platformVersion: '10.0.19045', brand: 'Edge', hardwareConcurrency: 8, notes: 'ghi chú' });
+    const u = core.updateProfile(p.id, { platformVersion: '' as never, hardwareConcurrency: null });
+    expect(u.platformVersion).toBeNull();
+    expect(u.hardwareConcurrency).toBeNull();
+  });
+
+  it('getProfile trả hồ sơ kèm trạng thái chạy và extensionIds, hoặc báo không tìm thấy', async () => {
+    const p = core.createProfile({ name: 'a' });
+    expect(core.getProfile(p.id)).toMatchObject({ id: p.id, name: 'a', run: null, extensionIds: [] });
+    await core.launch(p.id);
+    expect(core.getProfile(p.id).run).toMatchObject({ profileId: p.id, headless: false });
+    await core.stop(p.id);
+    expect(() => core.getProfile('không-có')).toThrow('Không tìm thấy hồ sơ');
+    expect(() => core.getProfile(5 as never)).toThrow('Không tìm thấy hồ sơ');
+  });
+
+  it('launch nhận tuỳ chọn headless và từ chối tuỳ chọn sai kiểu', async () => {
+    const p = core.createProfile({ name: 'a' });
+    const run = await core.launch(p.id, { headless: true });
+    expect(run.headless).toBe(true);
+    await core.stop(p.id);
+    expect((await core.launch(p.id)).headless).toBe(false);
+    await core.stop(p.id);
+    await expect(core.launch(p.id, { headless: 'có' } as never)).rejects.toThrow('Tham số không hợp lệ');
+    await expect(core.launch(p.id, 'headless' as never)).rejects.toThrow('Tham số không hợp lệ');
+    expect(core.getProfile(p.id).run).toBeNull();
+  });
+
+  it('mọi thay đổi hồ sơ, nhóm, proxy đều phát change', () => {
+    let count = 0;
+    core.on('change', () => count++);
+    const step = (fn: () => void): void => {
+      const before = count;
+      fn();
+      expect(count, fn.toString()).toBeGreaterThan(before);
+    };
+    let profileId = '';
+    let groupId = '';
+    let proxyId = '';
+    step(() => { profileId = core.createProfile({ name: 'a' }).id; });
+    step(() => { core.updateProfile(profileId, { name: 'b' }); });
+    step(() => { groupId = core.createGroup('g').id; });
+    step(() => { core.renameGroup(groupId, 'g2'); });
+    step(() => { proxyId = core.createProxy({ protocol: 'http', host: 'h', port: 1 }).id; });
+    step(() => { core.deleteProxy(proxyId); });
+    step(() => { core.deleteGroup(groupId); });
+    step(() => { core.deleteProfile(profileId); });
+  });
+
+  it('thao tác thất bại thì không phát change', () => {
+    let count = 0;
+    core.on('change', () => count++);
+    expect(() => core.createProfile({ name: '' })).toThrow();
+    expect(() => core.updateProfile('không-có', { name: 'x' })).toThrow();
+    expect(() => core.deleteProfile('không-có')).toThrow();
+    expect(() => core.deleteProxy('không-có')).toThrow();
+    expect(count).toBe(0);
+  });
 });

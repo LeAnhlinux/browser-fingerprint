@@ -132,6 +132,37 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+const PLATFORMS: readonly unknown[] = ['macos', 'windows', 'linux'];
+const PLATFORM_VERSION = /^\d{1,3}(\.\d{1,5}){0,3}$/;
+const BRAND = /^[A-Za-z][A-Za-z0-9 ]{0,29}$/;
+const MAX_NOTES = 5000;
+
+// Các trường này thành tham số dòng lệnh của nhân, nên lõi tự kiểm chứ không tin nơi gọi (giao diện hay API).
+function normalizeProfileFields<
+  T extends { platform?: unknown; platformVersion?: unknown; brand?: unknown; hardwareConcurrency?: unknown; notes?: unknown },
+>(input: T): T {
+  const next = { ...input };
+  if (next.platform !== undefined && !PLATFORMS.includes(next.platform)) throw new Error('Hệ điều hành không hợp lệ');
+  if (next.platformVersion !== undefined && next.platformVersion !== null) {
+    if (next.platformVersion === '') next.platformVersion = null;
+    else if (typeof next.platformVersion !== 'string' || !PLATFORM_VERSION.test(next.platformVersion)) {
+      throw new Error('Phiên bản hệ điều hành không hợp lệ');
+    }
+  }
+  if (next.brand !== undefined && (typeof next.brand !== 'string' || !BRAND.test(next.brand))) {
+    throw new Error('Tên trình duyệt không hợp lệ');
+  }
+  const cores = next.hardwareConcurrency;
+  if (cores !== undefined && cores !== null && (typeof cores !== 'number' || !Number.isInteger(cores) || cores < 1 || cores > 128)) {
+    throw new Error('Số nhân CPU phải là số nguyên từ 1 đến 128');
+  }
+  if (next.notes !== undefined) {
+    if (typeof next.notes !== 'string') throw new Error('Ghi chú không hợp lệ');
+    if (next.notes.length > MAX_NOTES) throw new Error(`Ghi chú tối đa ${MAX_NOTES} ký tự`);
+  }
+  return next;
+}
+
 const MAX_BULK = 500;
 const CHECK_CONCURRENCY = 5;
 const MAX_START_INDEX = 1_000_000_000;
@@ -215,6 +246,12 @@ export class Core extends EventEmitter {
     return this.store.listProfiles(filter).map((p) => ({ ...p, run: this.launcher.status(p.id), extensionIds: links[p.id] ?? [] }));
   }
 
+  getProfile(id: string): ProfileView {
+    const profile = typeof id === 'string' ? this.store.getProfile(id) : null;
+    if (!profile) throw new Error('Không tìm thấy hồ sơ');
+    return { ...profile, run: this.launcher.status(profile.id), extensionIds: this.store.profileExtensionLinks()[profile.id] ?? [] };
+  }
+
   private checkProfileRefs(patch: { name?: string; proxyId?: string | null; groupId?: string | null }): void {
     if (patch.proxyId && !this.store.getProxy(patch.proxyId)) throw new Error('Không tìm thấy proxy');
     if (patch.groupId && !this.store.listGroups().some((g) => g.id === patch.groupId)) throw new Error('Không tìm thấy nhóm');
@@ -239,27 +276,31 @@ export class Core extends EventEmitter {
   createProfile(input: ProfileInput): Profile {
     const { extensionIds, ...rest } = input;
     const exts = extensionIds === undefined ? null : this.checkExtensionIds(extensionIds);
-    const clean = normalizeLocaleFields(normalizeRefs(rest));
+    const clean = normalizeProfileFields(normalizeLocaleFields(normalizeRefs(rest)));
     const name = this.cleanName(clean.name);
     this.checkProfileRefs(clean);
-    return this.store.transaction(() => {
+    const created = this.store.transaction(() => {
       const profile = this.store.createProfile({ ...clean, name });
       if (exts) this.store.setProfileExtensions(profile.id, exts);
       return profile;
     });
+    this.emit('change', created.id);
+    return created;
   }
 
   updateProfile(id: string, patch: ProfileUpdate): Profile {
     if (!this.store.getProfile(id)) throw new Error('Không tìm thấy hồ sơ');
     const { extensionIds, ...rest } = patch;
     const exts = extensionIds === undefined ? null : this.checkExtensionIds(extensionIds);
-    const next = normalizeLocaleFields(normalizeRefs(rest));
+    const next = normalizeProfileFields(normalizeLocaleFields(normalizeRefs(rest)));
     if (next.name !== undefined) next.name = this.cleanName(next.name);
     this.checkProfileRefs(next);
-    return this.store.transaction(() => {
+    const updated = this.store.transaction(() => {
       if (exts) this.store.setProfileExtensions(id, exts);
       return this.store.updateProfile(id, next);
     });
+    this.emit('change', id);
+    return updated;
   }
 
   deleteProfile(id: string): void {
@@ -269,6 +310,7 @@ export class Core extends EventEmitter {
     if (dirname(dir) !== resolve(this.profilesDir)) throw new Error('Mã hồ sơ không hợp lệ');
     this.store.deleteProfile(id);
     rmSync(dir, { recursive: true, force: true });
+    this.emit('change', id);
   }
 
   listGroups(): Group[] {
@@ -276,15 +318,19 @@ export class Core extends EventEmitter {
   }
 
   createGroup(name: string): Group {
-    return this.store.createGroup(name);
+    const g = this.store.createGroup(name);
+    this.emit('change', '');
+    return g;
   }
 
   renameGroup(id: string, name: string): void {
     this.store.renameGroup(id, name);
+    this.emit('change', '');
   }
 
   deleteGroup(id: string): void {
     this.store.deleteGroup(id);
+    this.emit('change', '');
   }
 
   listProxies(): ProxyView[] {
@@ -301,7 +347,9 @@ export class Core extends EventEmitter {
   }
 
   createProxy(input: NewProxy): ProxyView {
-    return toProxyView(this.store.createProxy(this.prepareProxy(input)));
+    const view = toProxyView(this.store.createProxy(this.prepareProxy(input)));
+    this.emit('change', '');
+    return view;
   }
 
   updateProxy(id: string, patch: ProxyPatch): ProxyView {
@@ -336,6 +384,7 @@ export class Core extends EventEmitter {
       throw new Error(`Proxy đang được dùng bởi hồ sơ: ${users.map((p) => p.name).join(', ')}. Hãy đổi proxy của các hồ sơ đó trước.`);
     }
     this.store.deleteProxy(id);
+    this.emit('change', '');
   }
 
   importProxies(text: string, defaultProtocol: ProxyProtocol = 'http'): ProxyImportResult {
@@ -657,8 +706,11 @@ export class Core extends EventEmitter {
     });
   }
 
-  launch(id: string): Promise<RunInfo> {
-    return this.launcher.launch(id);
+  launch(id: string, opts?: { headless?: boolean }): Promise<RunInfo> {
+    if (opts !== undefined && (!isRecord(opts) || (opts.headless !== undefined && typeof opts.headless !== 'boolean'))) {
+      return Promise.reject(new Error(BAD_ARGS));
+    }
+    return this.launcher.launch(id, { headless: opts?.headless === true });
   }
 
   stop(id: string): Promise<void> {
