@@ -198,9 +198,12 @@ export class Core extends EventEmitter {
     const username = 'username' in dbPatch ? dbPatch.username : current.username;
     const passwordEncrypted = 'passwordEncrypted' in dbPatch ? dbPatch.passwordEncrypted : current.passwordEncrypted;
     if (passwordEncrypted && !username) throw new Error('Cần tài khoản khi có mật khẩu');
-    const updated = this.store.updateProxy(id, dbPatch);
-    if (Object.keys(dbPatch).length === 0) return toProxyView(updated);
-    this.store.clearProxyCheck(id);
+    if (Object.keys(dbPatch).length > 0) {
+      this.store.transaction(() => {
+        this.store.updateProxy(id, dbPatch);
+        this.store.clearProxyCheck(id);
+      });
+    }
     return toProxyView(this.store.getProxy(id)!);
   }
 

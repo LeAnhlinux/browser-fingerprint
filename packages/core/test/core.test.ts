@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Core } from '../src/core';
 import { hostPlatform } from '../src/fingerprint';
 
@@ -48,6 +48,17 @@ describe('Core', () => {
     expect(core.listProxies()[0].lastStatus).toBe('ok');
     expect(core.updateProxy(x.id, {}).lastStatus).toBe('ok');
     expect(core.updateProxy(x.id, { port: 2 }).lastStatus).toBeNull();
+  });
+
+  it('sửa proxy: nếu xoá kết quả kiểm tra lỗi thì không đổi gì cả', () => {
+    const x = core.createProxy({ protocol: 'http', host: 'h', port: 1 });
+    core.store.saveProxyCheck(x.id, { ok: true, ip: '203.0.113.7', country: 'US', timezone: 'America/Chicago', error: null });
+    const spy = vi.spyOn(core.store, 'clearProxyCheck').mockImplementation(() => {
+      throw new Error('hỏng');
+    });
+    expect(() => core.updateProxy(x.id, { port: 2 })).toThrow('hỏng');
+    spy.mockRestore();
+    expect(core.store.getProxy(x.id)).toMatchObject({ port: 1, lastStatus: 'ok', lastIp: '203.0.113.7' });
   });
 
   it('info báo trạng thái nhân và hệ điều hành máy', () => {
