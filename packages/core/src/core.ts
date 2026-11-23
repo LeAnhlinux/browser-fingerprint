@@ -6,7 +6,7 @@ import { hostPlatform } from './fingerprint';
 import { Launcher, type LauncherDeps, type RunInfo } from './launcher';
 import { localeForCountry } from './locale';
 import type { Upstream } from './proxy-bridge';
-import { type ProxyCheckResult, checkProxy as runProxyCheck } from './proxy-checker';
+import { RATE_LIMITED, type ProxyCheckResult, checkProxy as runProxyCheck, validTimezone } from './proxy-checker';
 import { parseProxyList } from './proxy-parse';
 import { type NewProfile, type NewProxyRow, type ProfileFilter, type ProfilePatch, ProfileStore, type ProxyRowPatch } from './store';
 import type { Group, Platform, Profile, Proxy, ProxyProtocol, SecretBox } from './types';
@@ -82,6 +82,34 @@ function normalizeRefs<T extends { proxyId?: string | null; groupId?: string | n
   const next = { ...input };
   if (next.proxyId !== undefined) next.proxyId = refValue(next.proxyId);
   if (next.groupId !== undefined) next.groupId = refValue(next.groupId);
+  return next;
+}
+
+const LANG_TAG = /^[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*$/;
+
+function checkLang(lang: unknown): string {
+  if (typeof lang !== 'string' || lang.length > 35 || !LANG_TAG.test(lang)) throw new Error('Ngôn ngữ không hợp lệ');
+  return lang;
+}
+
+function checkAcceptLang(value: unknown): string {
+  const tags = typeof value === 'string' ? value.split(',').map((t) => t.trim()) : [];
+  if (tags.length < 1 || tags.length > 10 || !tags.every((t) => t.length <= 35 && LANG_TAG.test(t))) {
+    throw new Error('Accept-Language không hợp lệ');
+  }
+  return tags.join(',');
+}
+
+// Chỉ kiểm tra các trường có mặt trong đầu vào; các giá trị này trở thành tham số dòng lệnh khi khởi chạy.
+function normalizeLocaleFields<T extends { timezone?: string; lang?: string; acceptLang?: string }>(input: T): T {
+  const next = { ...input };
+  if (next.timezone !== undefined) {
+    const tz = validTimezone(next.timezone);
+    if (!tz) throw new Error('Múi giờ không hợp lệ');
+    next.timezone = tz;
+  }
+  if (next.lang !== undefined) next.lang = checkLang(next.lang);
+  if (next.acceptLang !== undefined) next.acceptLang = checkAcceptLang(next.acceptLang);
   return next;
 }
 
@@ -175,7 +203,7 @@ export class Core extends EventEmitter {
   }
 
   createProfile(input: NewProfile): Profile {
-    const clean = normalizeRefs(input);
+    const clean = normalizeLocaleFields(normalizeRefs(input));
     const name = this.cleanName(clean.name);
     this.checkProfileRefs(clean);
     return this.store.createProfile({ ...clean, name });
@@ -183,7 +211,7 @@ export class Core extends EventEmitter {
 
   updateProfile(id: string, patch: ProfilePatch): Profile {
     if (!this.store.getProfile(id)) throw new Error('Không tìm thấy hồ sơ');
-    const next = normalizeRefs(patch);
+    const next = normalizeLocaleFields(normalizeRefs(patch));
     if (next.name !== undefined) next.name = this.cleanName(next.name);
     this.checkProfileRefs(next);
     return this.store.updateProfile(id, next);
@@ -251,6 +279,7 @@ export class Core extends EventEmitter {
         this.store.updateProxy(id, dbPatch);
         this.store.clearProxyCheck(id);
       });
+      this.emit('change', '');
     }
     return toProxyView(this.store.getProxy(id)!);
   }
@@ -316,6 +345,7 @@ export class Core extends EventEmitter {
     ) {
       throw new Error('Proxy đã thay đổi trong lúc kiểm tra, hãy kiểm tra lại');
     }
+    if (result.rateLimited) throw new Error(RATE_LIMITED);
     this.store.saveProxyCheck(id, result);
     this.emit('change', id);
     return toProxyView(this.store.getProxy(id)!);
@@ -361,6 +391,10 @@ export class Core extends EventEmitter {
     if (mode !== 'none' && mode !== 'unused') throw new Error('Cách gán proxy không hợp lệ');
     const pool = mode === 'unused' ? this.unusedProxies() : [];
     if (mode === 'unused' && pool.length < count) throw new Error(`Không đủ proxy chưa dùng: cần ${count}, có ${pool.length}`);
+    if (mode === 'unused' && input.applyLocale) {
+      const unchecked = pool.slice(0, count).filter((x) => localeFromProxy(x) === null).length;
+      if (unchecked > 0) throw new Error(`Có ${unchecked} proxy chưa kiểm tra thành công. Hãy bấm "Kiểm tra tất cả" trước khi tạo.`);
+    }
     const width = Math.max(2, String(start + count - 1).length);
     const names = Array.from({ length: count }, (_, i) => {
       const n = String(start + i).padStart(width, '0');

@@ -189,4 +189,29 @@ describe('checkProxy', () => {
     await new Promise<void>((r2) => target.close(() => r2()));
     expect(redirectHits).toBe(0);
   });
+
+  it('HTTP 429 từ dịch vụ tra IP được báo là giới hạn tốc độ, không phải proxy chết', async () => {
+    status = 429;
+    const r = await checkProxy(good(), { lookupUrl });
+    expect(r).toMatchObject({ ok: false, rateLimited: true, error: 'Dịch vụ tra IP đang giới hạn tốc độ, hãy thử lại sau' });
+    status = 200;
+    expect((await checkProxy(good(), { lookupUrl })).rateLimited).toBe(false);
+    expect((await checkProxy({ ...good(), password: 'sai' }, { lookupUrl })).rateLimited).toBe(false);
+  });
+
+  it('mã 590-599 từ cầu nối được báo là không kết nối được qua proxy', async () => {
+    for (const code of [590, 594, 599]) {
+      status = code;
+      expect(await checkProxy(good(), { lookupUrl })).toMatchObject({ ok: false, error: 'Không kết nối được qua proxy', rateLimited: false });
+    }
+    status = 500;
+    expect((await checkProxy(good(), { lookupUrl })).error).toBe('Proxy hoặc dịch vụ tra IP trả mã 500');
+  });
+
+  it('IP có ký tự % hoặc dài hơn 45 ký tự bị từ chối', async () => {
+    for (const q of ['fe80::1%eth0', `fe80::1%${'a'.repeat(100)}`, `${'1'.repeat(46)}`, `::ffff:${'1'.repeat(40)}`]) {
+      body = JSON.stringify({ status: 'success', query: q, countryCode: 'US' });
+      expect(await checkProxy(good(), { lookupUrl })).toMatchObject({ ok: false, error: 'Dịch vụ tra IP không trả địa chỉ IP' });
+    }
+  });
 });

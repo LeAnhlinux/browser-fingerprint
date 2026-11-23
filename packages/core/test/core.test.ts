@@ -42,6 +42,54 @@ beforeEach(async () => {
 });
 
 describe('Core', () => {
+  it('sửa proxy phát change để giao diện tải lại; không đổi gì thì không phát', () => {
+    const x = core.createProxy({ protocol: 'http', host: 'h', port: 1 });
+    const changes: string[] = [];
+    core.on('change', (id: string) => changes.push(id));
+    core.updateProxy(x.id, {});
+    expect(changes).toEqual([]);
+    core.updateProxy(x.id, { port: 2 });
+    expect(changes).toHaveLength(1);
+  });
+
+  it('múi giờ nhập tay phải là múi giờ IANA hợp lệ và được lưu dạng chuẩn', () => {
+    expect(core.createProfile({ name: 'a', timezone: 'america/chicago' }).timezone).toBe('America/Chicago');
+    const p = core.createProfile({ name: 'b' });
+    expect(core.updateProfile(p.id, { timezone: 'Europe/Berlin' }).timezone).toBe('Europe/Berlin');
+    for (const tz of ['Sao/Hoa', 'America/Chi cago', '--flag=1', '', '+01:00']) {
+      expect(() => core.createProfile({ name: 'x', timezone: tz })).toThrow('Múi giờ không hợp lệ');
+      expect(() => core.updateProfile(p.id, { timezone: tz })).toThrow('Múi giờ không hợp lệ');
+    }
+    expect(core.store.getProfile(p.id)!.timezone).toBe('Europe/Berlin');
+  });
+
+  it('ngôn ngữ nhập tay phải là thẻ ngôn ngữ hợp lệ', () => {
+    expect(core.createProfile({ name: 'a', lang: 'vi-VN' }).lang).toBe('vi-VN');
+    expect(core.createProfile({ name: 'b', lang: 'zh-Hant-TW' }).lang).toBe('zh-Hant-TW');
+    const p = core.createProfile({ name: 'c' });
+    for (const lang of ['en US', '--lang=x', 'e', '', 'en-', `en-${'a'.repeat(40)}`, 'en_US']) {
+      expect(() => core.createProfile({ name: 'x', lang })).toThrow('Ngôn ngữ không hợp lệ');
+      expect(() => core.updateProfile(p.id, { lang })).toThrow('Ngôn ngữ không hợp lệ');
+    }
+  });
+
+  it('Accept-Language nhập tay: 1 đến 10 thẻ, cắt khoảng trắng, nối bằng dấu phẩy', () => {
+    expect(core.createProfile({ name: 'a', acceptLang: ' vi-VN , vi,en-US ,en' }).acceptLang).toBe('vi-VN,vi,en-US,en');
+    const p = core.createProfile({ name: 'b' });
+    const tooMany = Array.from({ length: 11 }, () => 'en').join(',');
+    for (const acceptLang of ['', ',', 'en,,vi', 'en US', '--accept-lang=x', 'en;q=0.9', tooMany]) {
+      expect(() => core.createProfile({ name: 'x', acceptLang })).toThrow('Accept-Language không hợp lệ');
+      expect(() => core.updateProfile(p.id, { acceptLang })).toThrow('Accept-Language không hợp lệ');
+    }
+  });
+
+  it('tạo hồ sơ không ghi ngôn ngữ nào thì vẫn dùng mặc định của máy', () => {
+    const p = core.createProfile({ name: 'mặc định' });
+    expect(p.timezone.length).toBeGreaterThan(0);
+    expect(p.lang.length).toBeGreaterThan(0);
+    expect(core.updateProfile(p.id, { notes: 'ghi chú' }).lang).toBe(p.lang);
+  });
+
   it('sửa thông tin kết nối của proxy thì xoá kết quả kiểm tra cũ; chỉ đọc thì giữ', () => {
     const x = core.createProxy({ protocol: 'http', host: 'h', port: 1 });
     core.store.saveProxyCheck(x.id, { ok: true, ip: '203.0.113.7', country: 'US', timezone: 'America/Chicago', error: null });

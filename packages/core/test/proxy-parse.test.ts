@@ -120,4 +120,32 @@ describe('parseProxyList', () => {
       expect(e.reason).not.toMatch(/secret|1\.1\.1\.1|user\.com|::1/);
     }
   });
+
+  it('từ chối dòng quá dài ngay, không bị chậm vì chuỗi dấu gạch chéo', () => {
+    const started = performance.now();
+    const r = parseProxyList(`http://${'/'.repeat(200000)}x`);
+    expect(performance.now() - started).toBeLessThan(200);
+    expect(r.proxies).toEqual([]);
+    expect(r.errors).toEqual([{ line: 1, reason: 'Dòng quá dài' }]);
+  });
+
+  it('dòng có giao thức mà đọc được theo hai cách thì báo mơ hồ', () => {
+    const r = parseProxyList('http://1.1.1.1:80:me@x.com:1234');
+    expect(r.proxies).toEqual([]);
+    expect(r.errors).toHaveLength(1);
+    expect(r.errors[0].reason).toContain('hai cách');
+    expect(r.errors[0].reason).not.toContain('me@');
+  });
+
+  it('các dạng có giao thức thông thường vẫn dùng được', () => {
+    const r = parseProxyList(
+      ['http://user:pass@host.example:8080', 'socks5://u%40x:p@h.example:1080', 'socks5://1.1.1.1:80:user:pass'].join('\n'),
+    );
+    expect(r.errors).toEqual([]);
+    expect(r.proxies).toEqual([
+      { line: 1, protocol: 'http', host: 'host.example', port: 8080, username: 'user', password: 'pass' },
+      { line: 2, protocol: 'socks5', host: 'h.example', port: 1080, username: 'u@x', password: 'p' },
+      { line: 3, protocol: 'socks5', host: '1.1.1.1', port: 80, username: 'user', password: 'pass' },
+    ]);
+  });
 });

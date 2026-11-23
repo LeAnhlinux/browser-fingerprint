@@ -11,6 +11,8 @@ export interface ProxyCheckResult {
   timezone: string | null;
   error: string | null;
   ms: number;
+  /** Dịch vụ tra IP trả HTTP 429: không phải lỗi của proxy, không nên lưu như kết quả kiểm tra. */
+  rateLimited: boolean;
 }
 
 export interface CheckOptions {
@@ -21,9 +23,12 @@ export interface CheckOptions {
 const MAX_BODY = 16 * 1024;
 const TIMEOUT = 'Hết thời gian chờ';
 const UNREADABLE = 'Dịch vụ tra IP trả dữ liệu không đọc được';
+export const RATE_LIMITED = 'Dịch vụ tra IP đang giới hạn tốc độ, hãy thử lại sau';
+const CONNECT_FAILED = 'Không kết nối được qua proxy';
+const MAX_IP = 45;
 const OVERSIZE = Symbol('oversize');
 
-function validTimezone(tz: unknown): string | null {
+export function validTimezone(tz: unknown): string | null {
   if (typeof tz !== 'string' || !/^[A-Za-z0-9_+\-/]{1,64}$/.test(tz)) return null;
   try {
     return new Intl.DateTimeFormat('en-US', { timeZone: tz }).resolvedOptions().timeZone;
@@ -61,7 +66,7 @@ function getViaProxy(proxyPort: number, url: string, signal: AbortSignal): Promi
 }
 
 function fail(error: string, started: number): ProxyCheckResult {
-  return { ok: false, ip: null, country: null, timezone: null, error, ms: Date.now() - started };
+  return { ok: false, ip: null, country: null, timezone: null, error, ms: Date.now() - started, rateLimited: false };
 }
 
 /** Gửi đúng một request HTTP qua proxy tới dịch vụ tra IP. Không bao giờ reject. `timeoutMs` là hạn chót cho cả lần kiểm tra. */
@@ -90,6 +95,8 @@ export async function checkProxy(upstream: Upstream, opts: CheckOptions = {}): P
     bridge = opened;
     const res = await getViaProxy(opened.port, lookupUrl, ctl.signal);
     if (res.status === 407) return fail('Proxy từ chối tài khoản hoặc mật khẩu', started);
+    if (res.status === 429) return { ...fail(RATE_LIMITED, started), rateLimited: true };
+    if (res.status >= 590 && res.status <= 599) return fail(CONNECT_FAILED, started);
     if (res.status < 200 || res.status >= 300) return fail(`Proxy hoặc dịch vụ tra IP trả mã ${res.status}`, started);
     let json: Record<string, unknown>;
     try {
@@ -103,9 +110,9 @@ export async function checkProxy(upstream: Upstream, opts: CheckOptions = {}): P
       return fail(`Dịch vụ tra IP báo lỗi: ${detail.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 120)}`, started);
     }
     const ip = typeof json.query === 'string' ? json.query : typeof json.ip === 'string' ? json.ip : null;
-    if (!ip || net.isIP(ip) === 0) return fail('Dịch vụ tra IP không trả địa chỉ IP', started);
+    if (!ip || ip.length > MAX_IP || ip.includes('%') || net.isIP(ip) === 0) return fail('Dịch vụ tra IP không trả địa chỉ IP', started);
     const country = validCountry(json.countryCode ?? json.country);
-    return { ok: true, ip, country, timezone: validTimezone(json.timezone), error: null, ms: Date.now() - started };
+    return { ok: true, ip, country, timezone: validTimezone(json.timezone), error: null, ms: Date.now() - started, rateLimited: false };
   };
 
   const work = run();
@@ -121,7 +128,7 @@ export async function checkProxy(upstream: Upstream, opts: CheckOptions = {}): P
     return await Promise.race([work, deadline]);
   } catch (err) {
     if (err === OVERSIZE) return fail(UNREADABLE, started);
-    return fail((err as Error).message === TIMEOUT ? TIMEOUT : 'Không kết nối được qua proxy', started);
+    return fail((err as Error).message === TIMEOUT ? TIMEOUT : CONNECT_FAILED, started);
   } finally {
     clearTimeout(timer);
     ctl.abort();

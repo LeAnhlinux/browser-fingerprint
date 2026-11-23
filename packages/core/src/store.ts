@@ -77,6 +77,10 @@ export class ProfileStore {
   constructor(dbPath: string) {
     this.db = new DatabaseSync(dbPath);
     const { user_version } = this.db.prepare('PRAGMA user_version').get() as { user_version: number };
+    if (user_version > MIGRATIONS.length) {
+      this.db.close();
+      throw new Error('Cơ sở dữ liệu được tạo bởi bản ứng dụng mới hơn. Hãy cập nhật ứng dụng.');
+    }
     for (let i = user_version; i < MIGRATIONS.length; i++) {
       this.transaction(() => {
         this.db.exec(MIGRATIONS[i]);

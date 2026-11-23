@@ -10,7 +10,7 @@ let core: Core;
 let checked: Upstream[];
 let nextResult: (u: Upstream) => ProxyCheckResult;
 
-const okResult = (ip: string, country: string, timezone: string): ProxyCheckResult => ({ ok: true, ip, country, timezone, error: null, ms: 5 });
+const okResult = (ip: string, country: string, timezone: string): ProxyCheckResult => ({ ok: true, ip, country, timezone, error: null, ms: 5, rateLimited: false });
 
 beforeEach(async () => {
   checked = [];
@@ -60,8 +60,23 @@ describe('checkProxy', () => {
 
   it('proxy lỗi thì lưu trạng thái fail kèm lý do', async () => {
     const x = core.createProxy({ protocol: 'http', host: 'h', port: 1 });
-    nextResult = () => ({ ok: false, ip: null, country: null, timezone: null, error: 'Không kết nối được qua proxy', ms: 1 });
+    nextResult = () => ({ ok: false, ip: null, country: null, timezone: null, error: 'Không kết nối được qua proxy', ms: 1, rateLimited: false });
     expect(await core.checkProxy(x.id)).toMatchObject({ lastStatus: 'fail', lastError: 'Không kết nối được qua proxy', lastIp: null });
+  });
+
+  it('bị giới hạn tốc độ thì không lưu, giữ kết quả cũ và báo lỗi', async () => {
+    const x = core.createProxy({ protocol: 'http', host: 'h', port: 1 });
+    await core.checkProxy(x.id);
+    const before = core.listProxies()[0];
+    expect(before.lastStatus).toBe('ok');
+    nextResult = () => ({ ok: false, ip: null, country: null, timezone: null, error: 'x', ms: 1, rateLimited: true });
+    let changes = 0;
+    core.on('change', () => changes++);
+    await expect(core.checkProxy(x.id)).rejects.toThrow('Dịch vụ tra IP đang giới hạn tốc độ, hãy thử lại sau');
+    expect(core.listProxies()[0]).toEqual(before);
+    expect(changes).toBe(0);
+    await expect(core.checkProxies([x.id])).resolves.toBeUndefined();
+    expect(core.listProxies()[0]).toEqual(before);
   });
 
   it('id không tồn tại thì báo lỗi', async () => {
@@ -110,6 +125,24 @@ describe('createProfilesBulk', () => {
     await core.checkProxy(a.id);
     const [p] = core.createProfilesBulk({ count: 1, namePattern: 'D{n}', proxyMode: 'unused', applyLocale: true });
     expect(p).toMatchObject({ timezone: 'Europe/Berlin', lang: 'de-DE', acceptLang: 'de-DE,de,en-US,en' });
+  });
+
+  it('applyLocale với proxy chưa kiểm tra thành công thì từ chối cả thao tác', async () => {
+    const a = core.createProxy({ protocol: 'http', host: 'a', port: 1 });
+    core.createProxy({ protocol: 'http', host: 'b', port: 1 });
+    core.createProxy({ protocol: 'http', host: 'c', port: 1 });
+    nextResult = () => okResult('198.51.100.9', 'DE', 'Europe/Berlin');
+    await core.checkProxy(a.id);
+    const spare = core.createProxy({ protocol: 'http', host: 'd', port: 1 });
+    expect(() => core.createProfilesBulk({ count: 3, namePattern: 'D{n}', proxyMode: 'unused', applyLocale: true })).toThrow(
+      'Có 2 proxy chưa kiểm tra thành công. Hãy bấm "Kiểm tra tất cả" trước khi tạo.',
+    );
+    expect(core.listProfiles()).toEqual([]);
+    // Proxy dư ngoài số được gán không bị tính.
+    await core.checkProxies(core.listProxies().slice(0, 3).map((x) => x.id));
+    expect(core.listProxies().find((x) => x.id === spare.id)!.lastStatus).toBeNull();
+    const made = core.createProfilesBulk({ count: 3, namePattern: 'D{n}', proxyMode: 'unused', applyLocale: true });
+    expect(made.every((p) => p.timezone === 'Europe/Berlin' && p.proxyId !== spare.id)).toBe(true);
   });
 
   it('kiểm tra đầu vào', () => {

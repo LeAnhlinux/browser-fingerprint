@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { hostDefaults } from '../src/fingerprint';
 import { ProfileStore } from '../src/store';
 
+const MIGRATION_COUNT = 2;
 let store: ProfileStore;
 beforeEach(() => { store = new ProfileStore(':memory:'); });
 
@@ -134,7 +135,22 @@ describe('ProfileStore', () => {
     old.close();
     const upgraded = new ProfileStore(file);
     expect(upgraded.getProxy('x1')).toMatchObject({ host: '9.9.9.9', passwordEncrypted: 'enc', lastStatus: null });
+    const version = (upgraded as unknown as { db: DatabaseSync }).db.prepare('PRAGMA user_version').get() as { user_version: number };
+    expect(version.user_version).toBe(MIGRATION_COUNT);
     upgraded.close();
+  });
+
+  it('DB do bản ứng dụng mới hơn tạo ra thì từ chối mở và không sửa file', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'bf-new-')), 'db.sqlite');
+    const newer = new DatabaseSync(file);
+    newer.exec('CREATE TABLE tuong_lai (x INTEGER); PRAGMA user_version = 99;');
+    newer.close();
+    const before = readFileSync(file);
+    expect(() => new ProfileStore(file)).toThrow('Cơ sở dữ liệu được tạo bởi bản ứng dụng mới hơn. Hãy cập nhật ứng dụng.');
+    expect(readFileSync(file).equals(before)).toBe(true);
+    const check = new DatabaseSync(file);
+    expect((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(99);
+    check.close();
   });
 
   it('transaction: ROLLBACK lỗi thì vẫn ném lỗi gốc', () => {

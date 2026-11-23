@@ -33,6 +33,8 @@ class ProxyLineError extends Error {}
 
 const AMBIGUOUS = 'Dòng có thể hiểu theo hai cách, hãy ghi dạng giao_thức://user:pass@host:port';
 const ADDRESS_ERROR = 'Sai định dạng địa chỉ (IPv6 chưa hỗ trợ trong danh sách)';
+const TOO_LONG = 'Dòng quá dài';
+const MAX_LINE = 2048;
 const HOST = /^[^\s/[\]@:]+$/;
 const DIGITS = /^\d+$/;
 
@@ -48,7 +50,14 @@ function isHostPort(value: string): boolean {
   return hp.length === 2 && HOST.test(hp[0]) && DIGITS.test(hp[1]);
 }
 
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end -= 1;
+  return value.slice(0, end);
+}
+
 function parseLine(raw: string, defaultProtocol: ProxyProtocol): Omit<ParsedProxy, 'line'> {
+  if (raw.length > MAX_LINE) throw new ProxyLineError(TOO_LONG);
   let rest = raw;
   let protocol = defaultProtocol;
   let hasScheme = false;
@@ -58,7 +67,7 @@ function parseLine(raw: string, defaultProtocol: ProxyProtocol): Omit<ParsedProx
     if (s === 'http') protocol = 'http';
     else if (s === 'socks5' || s === 'socks5h') protocol = 'socks5';
     else throw new ProxyLineError('Giao thức chưa hỗ trợ');
-    rest = scheme[2].replace(/\/+$/, '');
+    rest = stripTrailingSlashes(scheme[2]);
     hasScheme = true;
   }
 
@@ -69,8 +78,12 @@ function parseLine(raw: string, defaultProtocol: ProxyProtocol): Omit<ParsedProx
   const parts = rest.split(':');
   // Không có giao thức: quyết định theo cách đọc nào hợp lệ về cấu trúc.
   const colonValid = !hasScheme && parts.length >= 4 && HOST.test(parts[0]) && DIGITS.test(parts[1]);
-  const atValid = !hasScheme && at >= 0 && isHostPort(rest.slice(at + 1));
+  const atValid = at >= 0 && isHostPort(rest.slice(at + 1));
   if (colonValid && atValid) throw new ProxyLineError(AMBIGUOUS);
+  // Có giao thức và có @: dạng host:port:user:pass ở phần trước @ cũng là một cách đọc hợp lệ.
+  if (hasScheme && atValid && parts.length >= 4 && HOST.test(parts[0]) && DIGITS.test(parts[1])) {
+    throw new ProxyLineError(AMBIGUOUS);
+  }
 
   if (colonValid || (hasScheme && at < 0 && parts.length >= 4)) {
     hostPort = `${parts[0]}:${parts[1]}`;
