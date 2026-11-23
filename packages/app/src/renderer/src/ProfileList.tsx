@@ -1,23 +1,32 @@
-import type { Group, ProfileView, ProxyView } from '@bf/core';
+import type { Group, ProfileView, ProxyView } from '@bf/core'
 
 interface Props {
-  profiles: ProfileView[];
-  groups: Group[];
-  proxies: ProxyView[];
-  onStart: (id: string) => void;
-  onStop: (id: string) => void;
-  onEdit: (p: ProfileView) => void;
-  onDelete: (p: ProfileView) => void;
+  profiles: ProfileView[]
+  groups: Group[]
+  proxies: ProxyView[]
+  onStart: (id: string) => void
+  onStop: (id: string) => void
+  onEdit: (p: ProfileView) => void
+  onDelete: (p: ProfileView) => void
 }
 
-export function ProfileList({ profiles, groups, proxies, onStart, onStop, onEdit, onDelete }: Props): React.JSX.Element {
-  const groupName = (id: string | null): string => groups.find((g) => g.id === id)?.name ?? '—';
+export function ProfileList({
+  profiles,
+  groups,
+  proxies,
+  onStart,
+  onStop,
+  onEdit,
+  onDelete
+}: Props): React.JSX.Element {
+  const groupName = (id: string | null): string => groups.find((g) => g.id === id)?.name ?? '—'
   const proxyLabel = (id: string | null): string => {
-    const x = proxies.find((p) => p.id === id);
-    return x ? `${x.protocol}://${x.host}:${x.port}` : 'Không dùng';
-  };
+    const x = proxies.find((p) => p.id === id)
+    return x ? `${x.protocol}://${x.host}:${x.port}` : 'Không dùng'
+  }
 
-  if (profiles.length === 0) return <p className="muted">Chưa có hồ sơ nào khớp. Bấm &quot;Hồ sơ mới&quot; để tạo.</p>;
+  if (profiles.length === 0)
+    return <p className="muted">Chưa có hồ sơ nào khớp. Bấm &quot;Hồ sơ mới&quot; để tạo.</p>
 
   return (
     <table>
@@ -37,20 +46,26 @@ export function ProfileList({ profiles, groups, proxies, onStart, onStop, onEdit
             <td>{p.name}</td>
             <td>{groupName(p.groupId)}</td>
             <td>{proxyLabel(p.proxyId)}</td>
-            <td className={p.run ? 'status-running' : 'muted'}>{p.run ? 'Đang chạy' : 'Sẵn sàng'}</td>
+            <td className={p.run ? 'status-running' : 'muted'}>
+              {p.run ? 'Đang chạy' : 'Sẵn sàng'}
+            </td>
             <td>{p.run ? p.run.cdpPort : '—'}</td>
             <td className="actions">
               {p.run ? (
                 <button onClick={() => onStop(p.id)}>Dừng</button>
               ) : (
-                <button className="primary" onClick={() => onStart(p.id)}>Khởi động</button>
+                <button className="primary" onClick={() => onStart(p.id)}>
+                  Khởi động
+                </button>
               )}
               <button onClick={() => onEdit(p)}>Sửa</button>
-              <button className="danger" disabled={p.run !== null} onClick={() => onDelete(p)}>Xoá</button>
+              <button className="danger" disabled={p.run !== null} onClick={() => onDelete(p)}>
+                Xoá
+              </button>
             </td>
           </tr>
         ))}
       </tbody>
     </table>
-  );
+  )
 }
