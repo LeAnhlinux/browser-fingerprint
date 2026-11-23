@@ -3,9 +3,10 @@
   "private": true,
   "packageManager": "pnpm@10.33.0",
   "scripts": {
-    "build": "pnpm --filter @bf/core build",
-    "test": "pnpm --filter @bf/core test",
-    "dev": "pnpm --filter @bf/core build && pnpm --filter @bf/app dev"
+    "build": "pnpm --filter @bf/core build && pnpm --filter @bf/api build",
+    "test": "pnpm --filter @bf/core test && pnpm --filter @bf/api test",
+    "dev": "pnpm run build && pnpm --filter @bf/app dev",
+    "bf": "node packages/api/dist/cli-main.js"
   },
   "pnpm": {
     "onlyBuiltDependencies": ["electron", "esbuild"]

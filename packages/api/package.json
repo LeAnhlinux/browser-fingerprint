@@ -1,0 +1,27 @@
+{
+  "name": "@bf/api",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=22.12"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "bf": "dist/cli-main.js",
+    "bf-mcp": "dist/mcp-main.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:engine": "vitest run --config vitest.engine.config.mts"
+  },
+  "dependencies": {
+    "@bf/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.1"
+  }
+}
