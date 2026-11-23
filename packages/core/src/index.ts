@@ -10,3 +10,5 @@ export * from './proxy-checker';
 export * from './locale';
 export * from './cdp';
 export * from './cookie-parse';
+export * from './crx';
+export * from './extension-files';
