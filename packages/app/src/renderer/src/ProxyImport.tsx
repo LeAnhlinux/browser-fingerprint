@@ -1,6 +1,6 @@
 import type { ProxyImportResult, ProxyProtocol } from '@bf/core'
 import { useState } from 'react'
-import { api } from './api'
+import { api, cleanError } from './api'
 
 interface Props {
   run: (fn: () => Promise<unknown>) => Promise<boolean>
@@ -11,20 +11,28 @@ export function ProxyImport({ run }: Props): React.JSX.Element {
   const [protocol, setProtocol] = useState<ProxyProtocol>('http')
   const [result, setResult] = useState<ProxyImportResult | null>(null)
   const [busy, setBusy] = useState(false)
+  const [failure, setFailure] = useState('')
 
   const submit = async (): Promise<void> => {
     if (busy || text.trim() === '') return
     setBusy(true)
+    const submitted = text
     setResult(null)
+    setFailure('')
     const box: { value: ProxyImportResult | null } = { value: null }
     const ok = await run(async () => {
-      box.value = await api.importProxies(text, protocol)
+      try {
+        box.value = await api.importProxies(submitted, protocol)
+      } catch (e) {
+        // Hiện lỗi ngay cạnh nút nhập, không đẩy lên đầu hộp thoại.
+        setFailure(cleanError(e))
+      }
     })
     setBusy(false)
     if (!ok || !box.value) return
     setResult(box.value)
     // Chỉ xoá ô nhập khi không còn dòng lỗi nào để người dùng sửa.
-    if (box.value.errors.length === 0) setText('')
+    if (box.value.errors.length === 0) setText((cur) => (cur === submitted ? '' : cur))
   }
 
   return (
@@ -51,6 +59,7 @@ export function ProxyImport({ run }: Props): React.JSX.Element {
           {busy ? 'Đang nhập…' : 'Nhập danh sách'}
         </button>
       </div>
+      {failure && <p className="error">{failure}</p>}
       {result && (
         <div className="import-result">
           <p>

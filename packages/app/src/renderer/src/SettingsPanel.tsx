@@ -1,6 +1,6 @@
 import type { Group, ProxyProtocol, ProxyView } from '@bf/core'
 import { useState } from 'react'
-import { api } from './api'
+import { api, cleanError } from './api'
 import { ProxyImport } from './ProxyImport'
 
 interface Props {
@@ -22,9 +22,25 @@ export function SettingsPanel({ groups, proxies, run, error, onClose }: Props): 
   const [renameValue, setRenameValue] = useState('')
   const [checking, setChecking] = useState<Set<string>>(new Set())
 
-  const check = async (ids: string[]): Promise<void> => {
+  const [checkErrors, setCheckErrors] = useState<Record<string, string>>({})
+
+  const check = async (ids: string[], single: boolean): Promise<void> => {
     setChecking((prev) => new Set([...prev, ...ids]))
-    await run(() => (ids.length === 1 ? api.checkProxy(ids[0]) : api.checkProxies(ids)))
+    setCheckErrors((prev) => {
+      const next = { ...prev }
+      for (const id of ids) delete next[id]
+      return next
+    })
+    await run(async () => {
+      try {
+        if (single) await api.checkProxy(ids[0])
+        else await api.checkProxies(ids)
+      } catch (e) {
+        // Lỗi của lần kiểm tra một proxy hiện ngay trên dòng proxy đó.
+        if (single) setCheckErrors((prev) => ({ ...prev, [ids[0]]: cleanError(e) }))
+        else throw e
+      }
+    })
     setChecking((prev) => {
       const next = new Set(prev)
       for (const id of ids) next.delete(id)
@@ -34,6 +50,7 @@ export function SettingsPanel({ groups, proxies, run, error, onClose }: Props): 
 
   const checkLabel = (x: ProxyView): string => {
     if (checking.has(x.id)) return 'Đang kiểm tra…'
+    if (checkErrors[x.id]) return `Lỗi: ${checkErrors[x.id]}`
     if (x.lastStatus === 'ok') {
       return ['Sống', x.lastIp, x.lastCountry, x.lastTimezone].filter(Boolean).join(' · ')
     }
@@ -87,7 +104,7 @@ export function SettingsPanel({ groups, proxies, run, error, onClose }: Props): 
   return (
     <div className="overlay">
       <div className="dialog">
-        {error && <p className="error">{error}</p>}
+        {error && <p className="error error-sticky">{error}</p>}
         <h2>Nhóm</h2>
         {groups.length === 0 && <p className="muted">Chưa có nhóm.</p>}
         {groups.map((g) => (
@@ -135,7 +152,12 @@ export function SettingsPanel({ groups, proxies, run, error, onClose }: Props): 
           <h2>Proxy</h2>
           <button
             disabled={proxies.length === 0 || checking.size > 0}
-            onClick={() => void check(proxies.map((x) => x.id))}
+            onClick={() =>
+              void check(
+                proxies.map((x) => x.id),
+                false
+              )
+            }
           >
             Kiểm tra tất cả
           </button>
@@ -155,13 +177,19 @@ export function SettingsPanel({ groups, proxies, run, error, onClose }: Props): 
               <br />
               <span
                 className={
-                  x.lastStatus === 'ok' ? 'check-ok' : x.lastStatus === 'fail' ? 'error' : 'muted'
+                  !checking.has(x.id) && checkErrors[x.id]
+                    ? 'error'
+                    : x.lastStatus === 'ok'
+                      ? 'check-ok'
+                      : x.lastStatus === 'fail'
+                        ? 'error'
+                        : 'muted'
                 }
               >
                 {checkLabel(x)}
               </span>
             </span>
-            <button disabled={checking.has(x.id)} onClick={() => void check([x.id])}>
+            <button disabled={checking.has(x.id)} onClick={() => void check([x.id], true)}>
               Kiểm tra
             </button>
             <button className="danger" onClick={() => void run(() => api.deleteProxy(x.id))}>
