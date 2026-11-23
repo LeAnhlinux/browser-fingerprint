@@ -170,6 +170,7 @@ export default function App(): React.JSX.Element {
       {selected.size > 0 && (
         <BulkBar
           ids={profiles.filter((p) => selected.has(p.id)).map((p) => p.id)}
+          proxiedCount={profiles.filter((p) => selected.has(p.id) && p.proxyId !== null).length}
           groups={groups}
           proxies={proxies}
           run={run}

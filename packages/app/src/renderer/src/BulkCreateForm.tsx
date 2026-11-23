@@ -123,7 +123,9 @@ export function BulkCreateForm({ groups, error, run, onClose }: Props): React.JS
         )}
         {error && <p className="error">{error}</p>}
         <div className="dialog-actions">
-          <button onClick={onClose}>Huỷ</button>
+          <button disabled={busy} onClick={onClose}>
+            Huỷ
+          </button>
           <button className="primary" disabled={!valid || busy} onClick={() => void submit()}>
             {busy ? 'Đang tạo…' : 'Tạo'}
           </button>
