@@ -51,7 +51,71 @@ beforeEach(() => {
     checkReachable: async () => {},
     closeBrowser: async () => { throw new Error('không có CDP thật'); },
     cdpTimeoutMs: 500,
+    windowWatchMs: 0,
   };
+});
+
+describe('Launcher: đóng hết cửa sổ thì dừng', () => {
+  const tick = (ms = 40): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+  function withCounts(seq: (number | null)[]) {
+    let i = 0;
+    const ports: number[] = [];
+    const countPages = async (port: number): Promise<number | null> => {
+      ports.push(port);
+      return seq[Math.min(i++, seq.length - 1)];
+    };
+    return { countPages, ports };
+  }
+
+  it('có tab rồi hết tab hai lần liền thì dừng hồ sơ', async () => {
+    const p = store.createProfile({ name: 'a' });
+    const c = withCounts([1, 2, 0, 0]);
+    const l = new Launcher({ ...deps, windowWatchMs: 5, countPages: c.countPages });
+    await l.launch(p.id);
+    await tick();
+    expect(sp.calls[0].child.killed).toBe(true);
+    expect(l.status(p.id)).toBeNull();
+    expect(c.ports[0]).toBe(9333);
+  });
+
+  it('chưa từng có tab thì không dừng (nhân đang mở cửa sổ đầu)', async () => {
+    const p = store.createProfile({ name: 'a' });
+    const l = new Launcher({ ...deps, windowWatchMs: 5, countPages: withCounts([0]).countPages });
+    await l.launch(p.id);
+    await tick();
+    expect(l.status(p.id)).not.toBeNull();
+  });
+
+  it('chỉ một lần thấy 0 tab hoặc không hỏi được thì không dừng', async () => {
+    const p = store.createProfile({ name: 'a' });
+    const l = new Launcher({ ...deps, windowWatchMs: 5, countPages: withCounts([1, 0, 1, null, null, 0, null, 1]).countPages });
+    await l.launch(p.id);
+    await tick();
+    expect(l.status(p.id)).not.toBeNull();
+  });
+
+  it('lần mở ẩn không bị theo dõi', async () => {
+    const p = store.createProfile({ name: 'a' });
+    const c = withCounts([1, 0]);
+    const l = new Launcher({ ...deps, windowWatchMs: 5, countPages: c.countPages });
+    await l.launch(p.id, { headless: true });
+    await tick();
+    expect(c.ports).toHaveLength(0);
+    expect(l.status(p.id)).not.toBeNull();
+  });
+
+  it('dừng tay thì ngừng hỏi', async () => {
+    const p = store.createProfile({ name: 'a' });
+    const c = withCounts([1]);
+    const l = new Launcher({ ...deps, windowWatchMs: 5, countPages: c.countPages });
+    await l.launch(p.id);
+    await tick(20);
+    await l.stop(p.id);
+    const n = c.ports.length;
+    await tick();
+    expect(c.ports.length).toBe(n);
+  });
 });
 
 describe('Launcher', () => {

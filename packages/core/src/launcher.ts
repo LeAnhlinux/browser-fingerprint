@@ -49,6 +49,23 @@ export interface LauncherDeps {
   killPid?: (pid: number) => void;
   cdpTimeoutMs?: number;
   killAfterMs?: number;
+  /** Đếm tab đang mở qua cổng CDP; null khi không hỏi được. */
+  countPages?: (cdpPort: number) => Promise<number | null>;
+  /** Chu kỳ kiểm tra cửa sổ (ms). 0 thì tắt: đóng hết cửa sổ không dừng hồ sơ. */
+  windowWatchMs?: number;
+}
+
+/** Số tab thường (không tính DevTools, extension nền) mà nhân đang mở. */
+export async function cdpCountPages(cdpPort: number): Promise<number | null> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${cdpPort}/json/list`, { signal: AbortSignal.timeout(2000) });
+    if (!res.ok) return null;
+    const list = (await res.json()) as { type?: string; url?: string }[];
+    if (!Array.isArray(list)) return null;
+    return list.filter((t) => t.type === 'page' && !String(t.url ?? '').startsWith('devtools://')).length;
+  } catch {
+    return null;
+  }
 }
 
 interface Entry {
@@ -236,6 +253,7 @@ export class Launcher extends EventEmitter {
         }
       });
       this.runs.set(profileId, { child: spawned, info, cleanedUp });
+      if (!info.headless) this.watchWindows(profileId, spawned, cleanedUp);
       this.emit('change', profileId);
       return info;
     } catch (err) {
@@ -251,6 +269,50 @@ export class Launcher extends EventEmitter {
       abort.abort();
       this.starting.delete(profileId);
     }
+  }
+
+  /**
+   * Trên macOS nhân vẫn chạy ngầm khi người dùng đóng hết cửa sổ. Theo dõi số tab:
+   * đã từng có tab, rồi hai lần kiểm tra liền nhau đều không còn tab nào thì dừng hồ sơ.
+   */
+  private watchWindows(profileId: string, child: ChildProcess, cleanedUp: Promise<void>): void {
+    const every = this.deps.windowWatchMs ?? 1000;
+    if (every <= 0) return;
+    const count = this.deps.countPages ?? cdpCountPages;
+    const port = this.runs.get(profileId)!.info.cdpPort;
+    let seenPage = false;
+    let emptyStreak = 0;
+    let busy = false;
+    let done = false;
+    const timer = setInterval(() => {
+      if (busy || done) return;
+      busy = true;
+      void count(port)
+        .then((n) => {
+          if (done || this.runs.get(profileId)?.child !== child) return;
+          if (n === null) return; // không hỏi được thì không kết luận gì
+          if (n > 0) {
+            seenPage = true;
+            emptyStreak = 0;
+            return;
+          }
+          if (!seenPage) return;
+          emptyStreak++;
+          if (emptyStreak >= 2) {
+            done = true;
+            clearInterval(timer);
+            void this.stop(profileId).catch(() => {});
+          }
+        })
+        .finally(() => {
+          busy = false;
+        });
+    }, every);
+    timer.unref?.();
+    void cleanedUp.then(() => {
+      done = true;
+      clearInterval(timer);
+    });
   }
 
   async stop(profileId: string): Promise<void> {

@@ -135,7 +135,7 @@ Cột **Trạng thái** cho biết:
 | ● Đang chạy | Cửa sổ trình duyệt của hồ sơ đang mở. |
 | ● Đang chạy ẩn | Hồ sơ đang chạy không có cửa sổ, thường do app tạm mở để nhập hay xuất cookie, hoặc do một script chạy ẩn. |
 
-- Trên Windows, đóng cửa sổ trình duyệt của hồ sơ cũng là dừng hồ sơ. Trên macOS thì không: giống Chrome, trình duyệt vẫn chạy sau khi đóng cửa sổ cuối cùng. Hãy bấm **Dừng** trong app, hoặc Cmd+Q trong cửa sổ trình duyệt đó.
+- Đóng cửa sổ cuối cùng của hồ sơ (hoặc tab cuối cùng) cũng là dừng hồ sơ, trên cả macOS lẫn Windows. Trên macOS app mất khoảng 2 giây để nhận ra rồi tự dừng.
 - **Proxy chết thì hồ sơ không mở**, và app báo proxy nào không kết nối được. App không bao giờ tự chuyển sang kết nối trực tiếp, để IP thật của bạn không bị lộ.
 - Mỗi hồ sơ chỉ mở được một lần một lúc. Nhiều hồ sơ khác nhau thì mở cùng lúc thoải mái.
 - Thoát app sẽ dừng mọi hồ sơ đang chạy.
