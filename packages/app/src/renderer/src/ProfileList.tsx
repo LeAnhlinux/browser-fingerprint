@@ -7,6 +7,7 @@ interface Props {
   onStart: (id: string) => void
   onStop: (id: string) => void
   onEdit: (p: ProfileView) => void
+  onCookies: (p: ProfileView) => void
   onDelete: (p: ProfileView) => void
   selected: Set<string>
   onToggle: (id: string) => void
@@ -20,6 +21,7 @@ export function ProfileList({
   onStart,
   onStop,
   onEdit,
+  onCookies,
   onDelete,
   selected,
   onToggle,
@@ -72,7 +74,7 @@ export function ProfileList({
             <td>{groupName(p.groupId)}</td>
             <td>{proxyLabel(p.proxyId)}</td>
             <td className={p.run ? 'status-running' : 'muted'}>
-              {p.run ? 'Đang chạy' : 'Sẵn sàng'}
+              {p.run ? (p.run.headless ? 'Đang chạy ẩn' : 'Đang chạy') : 'Sẵn sàng'}
             </td>
             <td>{p.run ? p.run.cdpPort : '—'}</td>
             <td className="actions">
@@ -83,6 +85,7 @@ export function ProfileList({
                   Khởi động
                 </button>
               )}
+              <button onClick={() => onCookies(p)}>Cookie</button>
               <button onClick={() => onEdit(p)}>Sửa</button>
               <button className="danger" disabled={p.run !== null} onClick={() => onDelete(p)}>
                 Xoá

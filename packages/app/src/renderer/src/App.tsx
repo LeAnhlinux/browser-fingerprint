@@ -2,6 +2,7 @@ import type { CoreInfo, Group, NewProfile, ProfileView, ProxyView } from '@bf/co
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { BulkBar } from './BulkBar'
 import { BulkCreateForm } from './BulkCreateForm'
+import { CookieDialog } from './CookieDialog'
 import { EngineGate } from './EngineGate'
 import { ProfileForm } from './ProfileForm'
 import { ProfileList } from './ProfileList'
@@ -22,6 +23,7 @@ export default function App(): React.JSX.Element {
   const savingRef = useRef(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [showBulkCreate, setShowBulkCreate] = useState(false)
+  const [cookieFor, setCookieFor] = useState<string | null>(null)
 
   const reload = useCallback(async () => {
     const filter = {
@@ -122,6 +124,8 @@ export default function App(): React.JSX.Element {
     }
   }
 
+  const cookieProfile = cookieFor ? (profiles.find((p) => p.id === cookieFor) ?? null) : null
+
   return (
     <div className="app">
       <div className="toolbar">
@@ -187,6 +191,10 @@ export default function App(): React.JSX.Element {
           setError('')
           setEditing(p)
         }}
+        onCookies={(p) => {
+          setError('')
+          setCookieFor(p.id)
+        }}
         onDelete={remove}
         selected={selected}
         onToggle={(id) =>
@@ -235,6 +243,7 @@ export default function App(): React.JSX.Element {
           }}
         />
       )}
+      {cookieProfile && <CookieDialog profile={cookieProfile} onClose={() => setCookieFor(null)} />}
       {showSettings && (
         <SettingsPanel
           groups={groups}
