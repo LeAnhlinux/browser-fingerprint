@@ -32,10 +32,12 @@ Muốn dùng dịch vụ khác, đặt biến môi trường `BF_IP_LOOKUP_URL` 
 
 Nếu proxy bị sửa trong lúc đang kiểm tra, lần kiểm tra đó thất bại với thông báo "Proxy đã thay đổi trong lúc kiểm tra, hãy kiểm tra lại"; bấm kiểm tra lại là được.
 
+Khi dán danh sách proxy, dòng bắt đầu bằng `#` được coi là chú thích và bị bỏ qua; dòng dài hơn 2048 ký tự bị từ chối. Nếu dịch vụ tra IP trả HTTP 429 (giới hạn tốc độ), app báo đúng như vậy và không ghi đè kết quả kiểm tra trước đó của proxy.
+
 ## Giới hạn đã biết
 
 - Nhân là bản dựng của bên thứ ba, mã nguồn bản vá được công bố chậm khoảng một tháng. Không dùng các hồ sơ này cho ví tiền mã hoá giá trị cao.
 - Chưa có bộ cài đặt (installer).
-- Giai đoạn 2 đến 4 chưa được xây dựng.
+- Giai đoạn 2 (tạo hồ sơ hàng loạt, nhập danh sách proxy, kiểm tra proxy, múi giờ và ngôn ngữ theo proxy) đã xây dựng xong; giai đoạn 3 và 4 chưa được xây dựng.
 
 Việc tuân thủ điều khoản dịch vụ của từng nền tảng là trách nhiệm của người dùng.
