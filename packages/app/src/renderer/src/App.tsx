@@ -1,13 +1,14 @@
-import type { CoreInfo, Extension, Group, ProfileInput, ProfileView, ProxyView } from '@bf/core'
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { BulkBar } from './BulkBar'
-import { BulkCreateForm } from './BulkCreateForm'
-import { CookieDialog } from './CookieDialog'
+import type { CoreInfo, Extension, Group, ProfileView, ProxyView } from '@bf/core'
+import { useCallback, useEffect, useState } from 'react'
 import { EngineGate } from './EngineGate'
-import { ProfileForm } from './ProfileForm'
-import { ProfileList } from './ProfileList'
-import { SettingsPanel } from './SettingsPanel'
+import { ExtensionsPage } from './pages/ExtensionsPage'
+import { GroupsPage } from './pages/GroupsPage'
+import { ProfilesPage } from './pages/ProfilesPage'
+import { ProxiesPage } from './pages/ProxiesPage'
+import { SettingsPage } from './pages/SettingsPage'
+import { Sidebar, type Page } from './Sidebar'
 import { api, cleanError, type ApiStatus } from './api'
+import { Banner } from './ui'
 
 export default function App(): React.JSX.Element {
   const [info, setInfo] = useState<CoreInfo | null>(null)
@@ -18,15 +19,9 @@ export default function App(): React.JSX.Element {
   const [groupExtensions, setGroupExtensions] = useState<Record<string, string[]>>({})
   const [search, setSearch] = useState('')
   const [groupFilter, setGroupFilter] = useState('all')
-  const [editing, setEditing] = useState<ProfileView | 'new' | null>(null)
-  const [showSettings, setShowSettings] = useState(false)
   const [error, setError] = useState('')
-  const [saving, setSaving] = useState(false)
-  const savingRef = useRef(false)
-  const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [showBulkCreate, setShowBulkCreate] = useState(false)
-  const [cookieFor, setCookieFor] = useState<string | null>(null)
   const [apiInfo, setApiInfo] = useState<ApiStatus | null>(null)
+  const [page, setPage] = useState<Page>('profiles')
 
   const reload = useCallback(async () => {
     const filter = {
@@ -44,11 +39,6 @@ export default function App(): React.JSX.Element {
       ])
       setInfo(i)
       setProfiles(p)
-      setSelected((prev) => {
-        const visible = new Set(p.map((x) => x.id))
-        const next = new Set([...prev].filter((id) => visible.has(id)))
-        return next.size === prev.size ? prev : next
-      })
       setGroups(g)
       setProxies(x)
       setExtensions(e)
@@ -94,197 +84,74 @@ export default function App(): React.JSX.Element {
     [reload]
   )
 
+  const clearError = useCallback(() => setError(''), [])
+
   if (!info) {
-    if (!error) return <div className="app muted">Đang tải…</div>
+    if (!error) return <div className="loading">Đang tải…</div>
     return (
-      <div className="app">
-        <p className="error">{error}</p>
-        <button
-          onClick={() => {
-            setError('')
-            void reload()
-          }}
-        >
-          Thử lại
-        </button>
+      <div className="gate">
+        <div className="card">
+          <Banner kind="error">{error}</Banner>
+          <button
+            className="btn"
+            onClick={() => {
+              setError('')
+              void reload()
+            }}
+          >
+            Thử lại
+          </button>
+        </div>
       </div>
     )
   }
   if (!info.engineInstalled) return <EngineGate info={info} onInstalled={() => void reload()} />
 
-  const save = async (input: ProfileInput): Promise<void> => {
-    if (savingRef.current) return
-    savingRef.current = true
-    const target = editing
-    setSaving(true)
-    try {
-      const ok = await run(() =>
-        target && target !== 'new' ? api.updateProfile(target.id, input) : api.createProfile(input)
-      )
-      if (ok) setEditing(null)
-    } finally {
-      savingRef.current = false
-      setSaving(false)
-    }
+  const go = (next: Page): void => {
+    setError('')
+    setPage(next)
   }
-
-  const remove = (p: ProfileView): void => {
-    if (
-      window.confirm(
-        `Xoá hồ sơ "${p.name}" cùng toàn bộ dữ liệu trình duyệt của nó? Không khôi phục được.`
-      )
-    ) {
-      void run(() => api.deleteProfile(p.id))
-    }
-  }
-
-  const cookieProfile = cookieFor ? (profiles.find((p) => p.id === cookieFor) ?? null) : null
+  const shared = { run, error, clearError }
 
   return (
-    <div className="app">
-      <div className="toolbar">
-        <input
-          className="grow"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Tìm theo tên hồ sơ"
-        />
-        <select value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)}>
-          <option value="all">Tất cả nhóm</option>
-          <option value="none">Chưa gán</option>
-          {groups.map((g) => (
-            <option key={g.id} value={g.id}>
-              {g.name}
-            </option>
-          ))}
-        </select>
-        <button
-          onClick={() => {
-            setError('')
-            setShowSettings(true)
-          }}
-        >
-          Nhóm, proxy, extension
-        </button>
-        <button
-          onClick={() => {
-            setError('')
-            setShowBulkCreate(true)
-          }}
-        >
-          Tạo hàng loạt
-        </button>
-        <button
-          className="primary"
-          onClick={() => {
-            setError('')
-            setEditing('new')
-          }}
-        >
-          Hồ sơ mới
-        </button>
-      </div>
-      {error && <p className="error">{error}</p>}
-      {selected.size > 0 && (
-        <BulkBar
-          ids={profiles.filter((p) => selected.has(p.id)).map((p) => p.id)}
-          proxiedCount={profiles.filter((p) => selected.has(p.id) && p.proxyId !== null).length}
-          groups={groups}
-          proxies={proxies}
-          run={run}
-          onClear={() => setSelected(new Set())}
-        />
-      )}
-      <ProfileList
-        profiles={profiles}
-        groups={groups}
-        proxies={proxies}
-        onStart={(id) => void run(() => api.launch(id))}
-        onStop={(id) => void run(() => api.stop(id))}
-        onEdit={(p) => {
-          setError('')
-          setEditing(p)
-        }}
-        onCookies={(p) => {
-          setError('')
-          setCookieFor(p.id)
-        }}
-        onDelete={remove}
-        selected={selected}
-        onToggle={(id) =>
-          setSelected((prev) => {
-            const next = new Set(prev)
-            if (next.has(id)) next.delete(id)
-            else next.add(id)
-            return next
-          })
-        }
-        onToggleAll={(ids, checked) =>
-          setSelected((prev) => {
-            const next = new Set(prev)
-            for (const id of ids) {
-              if (checked) next.add(id)
-              else next.delete(id)
-            }
-            return next
-          })
-        }
+    <div className="shell">
+      <Sidebar
+        page={page}
+        onNavigate={go}
+        runningCount={profiles.filter((p) => p.run !== null).length}
+        proxyCount={proxies.length}
+        groupCount={groups.length}
+        extensionCount={extensions.length}
+        info={info}
+        apiInfo={apiInfo}
       />
-      <p className="muted">Nhân: fingerprint-chromium {info.engineVersion}</p>
-      {apiInfo &&
-        (apiInfo.running ? (
-          <p className="muted">
-            API cục bộ: http://127.0.0.1:{apiInfo.port} ·{' '}
-            <button onClick={() => void api.revealApiToken()}>Hiện file token</button>
-          </p>
-        ) : apiInfo.enabled ? (
-          <p className="warn">API cục bộ không chạy: {apiInfo.error ?? 'không rõ lý do'}</p>
-        ) : (
-          <p className="muted">API cục bộ: đã tắt (BF_API=0)</p>
-        ))}
-      {editing && (
-        <ProfileForm
-          profile={editing === 'new' ? null : editing}
-          groups={groups}
-          proxies={proxies}
-          extensions={extensions}
-          groupExtensions={groupExtensions}
-          hostPlatform={info.hostPlatform}
-          onSave={(input) => void save(input)}
-          error={error}
-          saving={saving}
-          onCancel={() => {
-            setEditing(null)
-            setError('')
-          }}
-        />
-      )}
-      {showBulkCreate && (
-        <BulkCreateForm
-          groups={groups}
-          error={error}
-          run={run}
-          onClose={() => {
-            setShowBulkCreate(false)
-            setError('')
-          }}
-        />
-      )}
-      {cookieProfile && <CookieDialog profile={cookieProfile} onClose={() => setCookieFor(null)} />}
-      {showSettings && (
-        <SettingsPanel
-          groups={groups}
-          proxies={proxies}
-          extensions={extensions}
-          groupExtensions={groupExtensions}
-          run={run}
-          error={error}
-          onClose={() => {
-            setShowSettings(false)
-            setError('')
-          }}
-        />
-      )}
+      <main className="main">
+        {page === 'profiles' && (
+          <ProfilesPage
+            {...shared}
+            profiles={profiles}
+            groups={groups}
+            proxies={proxies}
+            extensions={extensions}
+            groupExtensions={groupExtensions}
+            hostPlatform={info.hostPlatform}
+            search={search}
+            onSearch={setSearch}
+            groupFilter={groupFilter}
+            onGroupFilter={setGroupFilter}
+          />
+        )}
+        {page === 'proxies' && <ProxiesPage {...shared} proxies={proxies} />}
+        {page === 'groups' && <GroupsPage {...shared} groups={groups} />}
+        {page === 'extensions' && (
+          <ExtensionsPage
+            extensions={extensions}
+            groups={groups}
+            groupExtensions={groupExtensions}
+          />
+        )}
+        {page === 'settings' && <SettingsPage info={info} apiInfo={apiInfo} />}
+      </main>
     </div>
   )
 }

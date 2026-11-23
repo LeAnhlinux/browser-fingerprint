@@ -47,6 +47,9 @@ importers:
       '@electron-toolkit/utils':
         specifier: ^4.0.0
         version: 4.0.0(electron@44.11.5)
+      '@tabler/icons-react':
+        specifier: ^3.52.0
+        version: 3.52.0(react@19.3.1)
       '@types/node':
         specifier: ^24.19.2
         version: 24.19.2
@@ -533,6 +536,14 @@ packages:
   '@szmarczak/http-timer@4.0.6':
     resolution: {integrity: sha512-4BAffykYOgO+5nzBWYwE3W90sBgLJoUPRWWcL8wlyiM8IB8ipJz3UMJ9KXQd1RKQXpKp8Tutn80HZtWsu2u76w==}
     engines: {node: '>=10'}
+
+  '@tabler/icons-react@3.52.0':
+    resolution: {integrity: sha512-tN22mz4KLVpR+psqu9bAsT4b1IdhKcPGA1fDhyQerIv+8azyowdWzf8e0hWxQSsIxDTfkipGfiL0/uHNmpbvgw==}
+    peerDependencies:
+      react: '>= 16'
+
+  '@tabler/icons@3.52.0':
+    resolution: {integrity: sha512-dldKlJNfO/gZnGLcIY0X2EFFKIMGwL/rEvTqglvBgAPFiwj9pZOCN5V3Sf0Gyjq6foX4VQmLdOmsS4w5FdWKAw==}
 
   '@tybys/wasm-util@0.10.5':
     resolution: {integrity: sha512-dOGOPxlaNV+G046mZzN+9C0dAcQZeSKcXiVaM0TYy/LM4ttTmgSBDxYfovcYI8Em3+eAbiAYpvWLOv8+ZVRJKA==}
@@ -3384,6 +3395,13 @@ snapshots:
   '@szmarczak/http-timer@4.0.6':
     dependencies:
       defer-to-connect: 2.0.1
+
+  '@tabler/icons-react@3.52.0(react@19.3.1)':
+    dependencies:
+      '@tabler/icons': 3.52.0
+      react: 19.3.1
+
+  '@tabler/icons@3.52.0': {}
 
   '@tybys/wasm-util@0.10.5':
     dependencies:

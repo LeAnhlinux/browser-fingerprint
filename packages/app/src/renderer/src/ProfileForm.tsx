@@ -1,5 +1,8 @@
 import type { Extension, Group, Platform, ProfileInput, ProfileView, ProxyView } from '@bf/core'
+import { IconTrash } from '@tabler/icons-react'
 import { useState } from 'react'
+import { proxyOption } from './format'
+import { Banner } from './ui'
 
 interface Props {
   profile: ProfileView | null
@@ -12,6 +15,13 @@ interface Props {
   saving: boolean
   onSave: (input: ProfileInput) => void
   onCancel: () => void
+  onDelete?: () => void
+}
+
+const PLATFORM_LABEL: Record<Platform, string> = {
+  macos: 'macOS',
+  windows: 'Windows',
+  linux: 'Linux'
 }
 
 export function ProfileForm({
@@ -24,7 +34,8 @@ export function ProfileForm({
   error,
   saving,
   onSave,
-  onCancel
+  onCancel,
+  onDelete
 }: Props): React.JSX.Element {
   const locale = navigator.language
   const [name, setName] = useState(profile?.name ?? '')
@@ -43,6 +54,10 @@ export function ProfileForm({
   )
   const [notes, setNotes] = useState(profile?.notes ?? '')
   const [extIds, setExtIds] = useState<Set<string>>(new Set(profile?.extensionIds ?? []))
+
+  const running = profile?.run != null
+  const proxy = proxies.find((x) => x.id === proxyId)
+  const proxyTz = proxy?.lastStatus === 'ok' ? proxy.lastTimezone : null
 
   const submit = (): void => {
     onSave({
@@ -67,22 +82,31 @@ export function ProfileForm({
     timezone.trim() !== ''
 
   return (
-    <div className="overlay">
-      <div className="dialog">
-        <h2>{profile ? 'Sửa hồ sơ' : 'Hồ sơ mới'}</h2>
-        <div className="field">
-          <label>Tên</label>
-          <input
-            autoFocus
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="IG-US-01"
-          />
-        </div>
-        <div className="row">
+    <>
+      <div className="drawer-body">
+        {error && <Banner kind="error">{error}</Banner>}
+        {running && (
+          <Banner kind="info">
+            Hồ sơ đang chạy: thay đổi về proxy, dấu vân tay và extension có hiệu lực từ lần khởi
+            động sau.
+          </Banner>
+        )}
+
+        <section className="section">
+          <h3>Cơ bản</h3>
           <div className="field">
-            <label>Nhóm</label>
-            <select value={groupId} onChange={(e) => setGroupId(e.target.value)}>
+            <label htmlFor="pf-name">Tên</label>
+            <input
+              id="pf-name"
+              autoFocus={!profile}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="IG-US-01"
+            />
+          </div>
+          <div className="field">
+            <label htmlFor="pf-group">Nhóm</label>
+            <select id="pf-group" value={groupId} onChange={(e) => setGroupId(e.target.value)}>
               <option value="">Chưa gán</option>
               {groups.map((g) => (
                 <option key={g.id} value={g.id}>
@@ -92,70 +116,126 @@ export function ProfileForm({
             </select>
           </div>
           <div className="field">
-            <label>Proxy</label>
-            <select value={proxyId} onChange={(e) => setProxyId(e.target.value)}>
-              <option value="">Không dùng</option>
+            <label htmlFor="pf-notes">Ghi chú</label>
+            <textarea
+              id="pf-notes"
+              rows={2}
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Tài khoản, mật khẩu ví, việc cần làm…"
+            />
+          </div>
+        </section>
+
+        <section className="section">
+          <h3>Mạng</h3>
+          <div className="field">
+            <label htmlFor="pf-proxy">Proxy</label>
+            <select id="pf-proxy" value={proxyId} onChange={(e) => setProxyId(e.target.value)}>
+              <option value="">Không dùng (kết nối trực tiếp bằng IP thật)</option>
               {proxies.map((x) => (
-                <option key={x.id} value={x.id}>{`${x.protocol}://${x.host}:${x.port}`}</option>
+                <option key={x.id} value={x.id}>
+                  {proxyOption(x)}
+                </option>
               ))}
             </select>
-          </div>
-        </div>
-        <div className="row">
-          <div className="field">
-            <label>Hệ điều hành giả</label>
-            <select value={platform} onChange={(e) => setPlatform(e.target.value as Platform)}>
-              <option value="macos">macOS</option>
-              <option value="windows">Windows</option>
-              <option value="linux">Linux</option>
-            </select>
+            {proxies.length === 0 && (
+              <span className="hint">Chưa có proxy nào. Thêm ở trang Proxy.</span>
+            )}
           </div>
           <div className="field">
-            <label>Số nhân CPU (bỏ trống để tự sinh)</label>
+            <label htmlFor="pf-tz">Múi giờ</label>
             <input
-              type="number"
-              min="1"
-              max="64"
-              value={cores}
-              onChange={(e) => setCores(e.target.value)}
+              id="pf-tz"
+              value={timezone}
+              onChange={(e) => setTimezone(e.target.value)}
+              placeholder="America/New_York"
             />
+            {proxyTz && proxyTz !== timezone ? (
+              <button className="link-btn" type="button" onClick={() => setTimezone(proxyTz)}>
+                Dùng múi giờ của proxy: {proxyTz}
+              </button>
+            ) : (
+              <span className="hint">Nên khớp với vùng của proxy.</span>
+            )}
           </div>
-        </div>
-        {platform !== hostPlatform && (
-          <p className="warn">
-            Hệ điều hành giả khác máy thật: dễ lộ qua font và GPU. Chỉ dùng khi bạn hiểu rủi ro.
-          </p>
-        )}
-        <div className="row">
-          <div className="field">
-            <label>Ngôn ngữ</label>
-            <input value={lang} onChange={(e) => setLang(e.target.value)} placeholder="en-US" />
+          <div className="grid-2">
+            <div className="field">
+              <label htmlFor="pf-lang">Ngôn ngữ</label>
+              <input
+                id="pf-lang"
+                value={lang}
+                onChange={(e) => setLang(e.target.value)}
+                placeholder="en-US"
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="pf-al">Accept-Language</label>
+              <input
+                id="pf-al"
+                value={acceptLang}
+                onChange={(e) => setAcceptLang(e.target.value)}
+                placeholder="en-US,en"
+              />
+            </div>
           </div>
-          <div className="field">
-            <label>Accept-Language</label>
-            <input
-              value={acceptLang}
-              onChange={(e) => setAcceptLang(e.target.value)}
-              placeholder="en-US,en"
-            />
+        </section>
+
+        <section className="section">
+          <h3>Dấu vân tay</h3>
+          <div className="grid-2">
+            <div className="field">
+              <label htmlFor="pf-os">Hệ điều hành giả</label>
+              <select
+                id="pf-os"
+                value={platform}
+                onChange={(e) => setPlatform(e.target.value as Platform)}
+              >
+                {(Object.keys(PLATFORM_LABEL) as Platform[]).map((p) => (
+                  <option key={p} value={p}>
+                    {PLATFORM_LABEL[p]}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="pf-cores">Số nhân CPU</label>
+              <input
+                id="pf-cores"
+                type="number"
+                min="1"
+                max="128"
+                value={cores}
+                onChange={(e) => setCores(e.target.value)}
+                placeholder="Tự sinh"
+              />
+            </div>
           </div>
-        </div>
-        <div className="field">
-          <label>Múi giờ (nên khớp với vùng của proxy)</label>
-          <input
-            value={timezone}
-            onChange={(e) => setTimezone(e.target.value)}
-            placeholder="America/New_York"
-          />
-        </div>
+          {platform !== hostPlatform && (
+            <Banner kind="warn">
+              Hệ điều hành giả khác máy thật ({PLATFORM_LABEL[hostPlatform]}): dễ lộ qua font và
+              GPU. Chỉ dùng khi bạn hiểu rủi ro.
+            </Banner>
+          )}
+          {profile ? (
+            <p className="faint">
+              Seed dấu vân tay: <span className="mono">{profile.seed}</span> (cố định cho hồ sơ này)
+            </p>
+          ) : (
+            <p className="faint">
+              Seed dấu vân tay được sinh ngẫu nhiên khi tạo và không đổi về sau.
+            </p>
+          )}
+        </section>
+
         {extensions.length > 0 && (
-          <div className="field">
-            <label>Extension (có hiệu lực từ lần khởi động sau)</label>
-            <div className="check-list">
+          <section className="section">
+            <h3>Extension</h3>
+            <div className="check-grid">
               {extensions.map((ext) => {
                 const fromGroup = (groupExtensions[groupId] ?? []).includes(ext.id)
                 return (
-                  <label key={ext.id}>
+                  <label key={ext.id} title={fromGroup ? 'Được gán qua nhóm' : undefined}>
                     <input
                       type="checkbox"
                       disabled={fromGroup}
@@ -169,27 +249,37 @@ export function ProfileForm({
                         })
                       }
                     />
-                    {ext.name}
-                    {fromGroup && <span className="muted"> (từ nhóm)</span>}
+                    <span>
+                      {ext.name}
+                      {fromGroup && <span className="faint"> · từ nhóm</span>}
+                    </span>
                   </label>
                 )
               })}
             </div>
-          </div>
+          </section>
         )}
-        <div className="field">
-          <label>Ghi chú</label>
-          <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
-        </div>
-        {profile && <p className="muted">Seed dấu vân tay: {profile.seed} (cố định)</p>}
-        {error && <p className="error">{error}</p>}
-        <div className="dialog-actions">
-          <button onClick={onCancel}>Huỷ</button>
-          <button className="primary" disabled={!valid} onClick={submit}>
-            {saving ? 'Đang lưu…' : 'Lưu'}
-          </button>
-        </div>
       </div>
-    </div>
+      <div className="drawer-foot">
+        {onDelete && (
+          <button
+            className="btn danger sm"
+            disabled={saving || running}
+            title={running ? 'Hãy dừng hồ sơ trước khi xoá' : undefined}
+            onClick={onDelete}
+          >
+            <IconTrash size={14} />
+            Xoá hồ sơ
+          </button>
+        )}
+        <span className="spacer" />
+        <button className="btn" disabled={saving} onClick={onCancel}>
+          Huỷ
+        </button>
+        <button className="btn primary" disabled={!valid} onClick={submit}>
+          {saving ? 'Đang lưu…' : profile ? 'Lưu thay đổi' : 'Tạo hồ sơ'}
+        </button>
+      </div>
+    </>
   )
 }

@@ -1,6 +1,7 @@
 import type { Group } from '@bf/core'
 import { useRef, useState } from 'react'
 import { api } from './api'
+import { Banner, Modal } from './ui'
 
 interface Props {
   groups: Group[]
@@ -55,82 +56,92 @@ export function BulkCreateForm({ groups, error, run, onClose }: Props): React.JS
   }
 
   return (
-    <div className="overlay">
-      <div className="dialog">
-        <h2>Tạo hồ sơ hàng loạt</h2>
-        <div className="row">
-          <div className="field">
-            <label>Số lượng (1 đến 500)</label>
-            <input
-              type="number"
-              min="1"
-              max="500"
-              value={count}
-              onChange={(e) => setCount(e.target.value)}
-            />
-          </div>
-          <div className="field">
-            <label>Số bắt đầu</label>
-            <input type="number" min="0" value={start} onChange={(e) => setStart(e.target.value)} />
-          </div>
-        </div>
-        <div className="field">
-          <label>Mẫu tên ({'{n}'} là số thứ tự; không có thì số được nối vào cuối)</label>
-          <input
-            autoFocus
-            value={pattern}
-            onChange={(e) => setPattern(e.target.value)}
-            placeholder="AMZ-US-{n}"
-          />
-        </div>
-        {valid && (
-          <p className="muted">
-            Ví dụ: {example(0)}
-            {countNum > 1 ? `, ${example(1)}` : ''}
-            {countNum > 2 ? `, … ${example(countNum - 1)}` : ''}
-          </p>
-        )}
-        <div className="field">
-          <label>Nhóm</label>
-          <select value={groupId} onChange={(e) => setGroupId(e.target.value)}>
-            <option value="">Chưa gán</option>
-            {groups.map((g) => (
-              <option key={g.id} value={g.id}>
-                {g.name}
-              </option>
-            ))}
-          </select>
-        </div>
-        <label>
-          <input
-            type="checkbox"
-            checked={useProxies}
-            onChange={(e) => setUseProxies(e.target.checked)}
-          />{' '}
-          Gán lần lượt các proxy chưa dùng (thiếu proxy thì không tạo hồ sơ nào)
-        </label>
-        {useProxies && (
-          <p>
-            <label>
-              <input
-                type="checkbox"
-                checked={applyLocale}
-                onChange={(e) => setApplyLocale(e.target.checked)}
-              />{' '}
-              Đặt múi giờ và ngôn ngữ theo kết quả kiểm tra của proxy
-            </label>
-          </p>
-        )}
-        {error && <p className="error">{error}</p>}
-        <div className="dialog-actions">
-          <button disabled={busy} onClick={onClose}>
+    <Modal
+      title="Tạo hồ sơ hàng loạt"
+      onClose={onClose}
+      busy={busy}
+      footer={
+        <>
+          <button className="btn" disabled={busy} onClick={onClose}>
             Huỷ
           </button>
-          <button className="primary" disabled={!valid || busy} onClick={() => void submit()}>
-            {busy ? 'Đang tạo…' : 'Tạo'}
+          <button className="btn primary" disabled={!valid || busy} onClick={() => void submit()}>
+            {busy ? 'Đang tạo…' : `Tạo ${valid ? countNum : ''} hồ sơ`}
           </button>
+        </>
+      }
+    >
+      {error && <Banner kind="error">{error}</Banner>}
+      <div className="field">
+        <label htmlFor="bc-pattern">Mẫu tên</label>
+        <input
+          id="bc-pattern"
+          autoFocus
+          value={pattern}
+          onChange={(e) => setPattern(e.target.value)}
+          placeholder="AMZ-US-{n}"
+        />
+        <span className="hint">
+          {valid
+            ? `Ví dụ: ${example(0)}${countNum > 1 ? `, ${example(1)}` : ''}${countNum > 2 ? `, … ${example(countNum - 1)}` : ''}`
+            : '{n} là số thứ tự; không có {n} thì số được nối vào cuối tên.'}
+        </span>
+      </div>
+      <div className="grid-2">
+        <div className="field">
+          <label htmlFor="bc-count">Số lượng (1 đến 500)</label>
+          <input
+            id="bc-count"
+            type="number"
+            min="1"
+            max="500"
+            value={count}
+            onChange={(e) => setCount(e.target.value)}
+          />
+        </div>
+        <div className="field">
+          <label htmlFor="bc-start">Số bắt đầu</label>
+          <input
+            id="bc-start"
+            type="number"
+            min="0"
+            value={start}
+            onChange={(e) => setStart(e.target.value)}
+          />
         </div>
       </div>
-    </div>
+      <div className="field">
+        <label htmlFor="bc-group">Nhóm</label>
+        <select id="bc-group" value={groupId} onChange={(e) => setGroupId(e.target.value)}>
+          <option value="">Chưa gán</option>
+          {groups.map((g) => (
+            <option key={g.id} value={g.id}>
+              {g.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      <label className="check-row">
+        <input
+          type="checkbox"
+          checked={useProxies}
+          onChange={(e) => setUseProxies(e.target.checked)}
+        />
+        <span>
+          Gán lần lượt các proxy chưa dùng
+          <span className="faint"> (thiếu proxy thì không tạo hồ sơ nào)</span>
+        </span>
+      </label>
+      {useProxies && (
+        <label className="check-row">
+          <input
+            type="checkbox"
+            checked={applyLocale}
+            onChange={(e) => setApplyLocale(e.target.checked)}
+          />
+          <span>Đặt múi giờ và ngôn ngữ theo kết quả kiểm tra của proxy</span>
+        </label>
+      )}
+    </Modal>
   )
 }

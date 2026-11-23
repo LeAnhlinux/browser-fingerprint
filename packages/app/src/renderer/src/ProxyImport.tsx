@@ -1,6 +1,7 @@
 import type { ProxyImportResult, ProxyProtocol } from '@bf/core'
 import { useState } from 'react'
 import { api, cleanError } from './api'
+import { Banner } from './ui'
 
 interface Props {
   run: (fn: () => Promise<unknown>) => Promise<boolean>
@@ -24,7 +25,7 @@ export function ProxyImport({ run }: Props): React.JSX.Element {
       try {
         box.value = await api.importProxies(submitted, protocol)
       } catch (e) {
-        // Hiện lỗi ngay cạnh nút nhập, không đẩy lên đầu hộp thoại.
+        // Hiện lỗi ngay trong ngăn nhập, không đẩy ra trang.
         setFailure(cleanError(e))
       }
     })
@@ -36,44 +37,65 @@ export function ProxyImport({ run }: Props): React.JSX.Element {
   }
 
   return (
-    <div className="import-box">
-      <div className="field">
-        <label>
-          Dán danh sách proxy, mỗi dòng một proxy: giao_thức://user:pass@host:port,
-          user:pass@host:port, host:port:user:pass hoặc host:port
-        </label>
-        <textarea
-          rows={5}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          spellCheck={false}
-          placeholder={'socks5://user:pass@1.2.3.4:1080\n5.6.7.8:8080:user:pass'}
-        />
+    <>
+      <div className="drawer-body">
+        {failure && <Banner kind="error">{failure}</Banner>}
+        {result && (
+          <Banner kind={result.errors.length === 0 ? 'ok' : 'warn'}>
+            <strong>Đã thêm {result.created.length} proxy.</strong>
+            {result.skipped > 0 && ` Bỏ qua ${result.skipped} proxy trùng.`}
+            {result.errors.length > 0 && (
+              <div className="result-list">
+                {result.errors.map((e) => (
+                  <p key={e.line}>
+                    Dòng {e.line}: {e.reason}
+                  </p>
+                ))}
+              </div>
+            )}
+          </Banner>
+        )}
+        <div className="field">
+          <label htmlFor="pi-text">Mỗi dòng một proxy</label>
+          <textarea
+            id="pi-text"
+            className="mono"
+            rows={12}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            spellCheck={false}
+            placeholder={
+              'socks5://user:pass@1.2.3.4:1080\n5.6.7.8:8080:user:pass\nuser:pass@9.9.9.9:3128\n10.0.0.1:8080'
+            }
+          />
+          <span className="hint">
+            Nhận các dạng giao_thức://user:pass@host:port, user:pass@host:port, host:port:user:pass
+            và host:port. Dòng trống và dòng bắt đầu bằng # bị bỏ qua; proxy trùng không được thêm
+            lần hai.
+          </span>
+        </div>
+        <div className="field">
+          <label htmlFor="pi-proto">Giao thức cho dòng không ghi giao thức</label>
+          <select
+            id="pi-proto"
+            value={protocol}
+            onChange={(e) => setProtocol(e.target.value as ProxyProtocol)}
+          >
+            <option value="http">HTTP</option>
+            <option value="socks5">SOCKS5</option>
+          </select>
+        </div>
       </div>
-      <div className="row">
-        <select value={protocol} onChange={(e) => setProtocol(e.target.value as ProxyProtocol)}>
-          <option value="http">Mặc định HTTP</option>
-          <option value="socks5">Mặc định SOCKS5</option>
-        </select>
-        <button disabled={busy || text.trim() === ''} onClick={() => void submit()}>
+      <div className="drawer-foot">
+        <span className="spacer" />
+        <button
+          className="btn primary"
+          disabled={busy || text.trim() === ''}
+          onClick={() => void submit()}
+        >
           {busy ? 'Đang nhập…' : 'Nhập danh sách'}
         </button>
       </div>
-      {failure && <p className="error">{failure}</p>}
-      {result && (
-        <div className="import-result">
-          <p>
-            Đã thêm {result.created.length} proxy
-            {result.skipped > 0 ? `, bỏ qua ${result.skipped} proxy trùng` : ''}
-            {result.errors.length > 0 ? `, ${result.errors.length} dòng lỗi` : ''}.
-          </p>
-          {result.errors.map((e) => (
-            <p className="error" key={e.line}>
-              Dòng {e.line}: {e.reason}
-            </p>
-          ))}
-        </div>
-      )}
-    </div>
+    </>
   )
 }

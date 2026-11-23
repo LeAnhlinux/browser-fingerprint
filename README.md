@@ -2,6 +2,8 @@
 
 Trình quản lý hồ sơ trình duyệt tách biệt (antidetect) dùng cá nhân, chạy hoàn toàn trên máy bạn. Mỗi hồ sơ có thư mục dữ liệu riêng, seed dấu vân tay riêng và proxy riêng (tuỳ chọn). Thiết kế (cả bốn giai đoạn đã xây xong) nằm trong `docs/superpowers/specs/2026-11-23-antidetect-browser-design.md`.
 
+**Người dùng: đọc [Hướng dẫn sử dụng](docs/HUONG-DAN.md)** (có ảnh chụp từng màn hình). README này dành cho việc build, chạy từ mã nguồn và lập trình với API.
+
 ## Yêu cầu
 
 - Node >= 22.12

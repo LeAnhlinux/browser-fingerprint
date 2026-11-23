@@ -1,6 +1,8 @@
 import type { Group, LocaleApplyResult, ProxyView } from '@bf/core'
 import { useRef, useState } from 'react'
+import { IconX } from '@tabler/icons-react'
 import { api } from './api'
+import { proxyOption } from './format'
 
 interface Props {
   ids: string[]
@@ -92,10 +94,19 @@ export function BulkBar({
   }
 
   return (
-    <div className="bulk-bar">
-      <strong>Đã chọn {ids.length}</strong>
-      <select disabled={busy} value={groupId} onChange={(e) => setGroupId(e.target.value)}>
-        <option value="">Chưa gán</option>
+    <div className="bulk-bar" role="region" aria-label="Thao tác với hồ sơ đã chọn">
+      <button className="icon-btn" title="Bỏ chọn" aria-label="Bỏ chọn" onClick={onClear}>
+        <IconX size={16} />
+      </button>
+      <span className="count">Đã chọn {ids.length}</span>
+      <span className="sep" />
+      <select
+        disabled={busy}
+        value={groupId}
+        onChange={(e) => setGroupId(e.target.value)}
+        aria-label="Nhóm để gán"
+      >
+        <option value="">Chưa gán nhóm</option>
         {groups.map((g) => (
           <option key={g.id} value={g.id}>
             {g.name}
@@ -103,6 +114,7 @@ export function BulkBar({
         ))}
       </select>
       <button
+        className="btn sm"
         disabled={busy}
         onClick={() =>
           void act(() => api.updateProfilesBulk(ids, { groupId: groupId || null }), 'Đã đổi nhóm')
@@ -110,23 +122,30 @@ export function BulkBar({
       >
         Gán nhóm
       </button>
-      <select disabled={busy} value={proxyId} onChange={(e) => setProxyId(e.target.value)}>
-        <option value="">Không dùng</option>
+      <span className="sep" />
+      <select
+        disabled={busy}
+        value={proxyId}
+        onChange={(e) => setProxyId(e.target.value)}
+        aria-label="Proxy để gán"
+      >
+        <option value="">Không dùng proxy</option>
         {proxies.map((x) => (
-          <option key={x.id} value={x.id}>{`${x.protocol}://${x.host}:${x.port}`}</option>
+          <option key={x.id} value={x.id}>
+            {proxyOption(x)}
+          </option>
         ))}
       </select>
-      <button disabled={busy} onClick={setProxy}>
+      <button className="btn sm" disabled={busy} onClick={setProxy}>
         Gán proxy
       </button>
-      <button disabled={busy} onClick={assignUnused}>
-        Gán proxy chưa dùng lần lượt
+      <button className="btn sm" disabled={busy} onClick={assignUnused}>
+        Gán proxy chưa dùng
       </button>
-      <button disabled={busy} onClick={() => void applyLocale()}>
-        Múi giờ, ngôn ngữ theo proxy
+      <button className="btn sm" disabled={busy} onClick={() => void applyLocale()}>
+        Múi giờ theo proxy
       </button>
-      <span className="grow muted">{note}</span>
-      <button onClick={onClear}>Bỏ chọn</button>
+      {note && <span className="note">{note}</span>}
     </div>
   )
 }
