@@ -9,6 +9,8 @@ const METHODS = new Set([
   'info', 'listProfiles', 'createProfile', 'updateProfile', 'deleteProfile',
   'listGroups', 'createGroup', 'renameGroup', 'deleteGroup',
   'listProxies', 'createProxy', 'updateProxy', 'deleteProxy',
+  'importProxies', 'checkProxy', 'checkProxies',
+  'createProfilesBulk', 'updateProfilesBulk', 'assignUnusedProxies', 'applyProxyLocale',
   'launch', 'stop',
 ])
 
@@ -44,7 +46,8 @@ async function startCore(): Promise<void> {
   const c = new Core({
     dataDir: app.getPath('userData'),
     secrets,
-    ...(process.env.BF_ENGINES_DIR ? { enginesDir: process.env.BF_ENGINES_DIR } : {})
+    ...(process.env.BF_ENGINES_DIR ? { enginesDir: process.env.BF_ENGINES_DIR } : {}),
+    ...(process.env.BF_IP_LOOKUP_URL ? { lookupUrl: process.env.BF_IP_LOOKUP_URL } : {})
   })
   await c.init()
   core = c

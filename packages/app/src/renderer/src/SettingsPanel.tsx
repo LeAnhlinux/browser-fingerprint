@@ -1,6 +1,7 @@
 import type { Group, ProxyProtocol, ProxyView } from '@bf/core'
 import { useState } from 'react'
 import { api } from './api'
+import { ProxyImport } from './ProxyImport'
 
 interface Props {
   groups: Group[]
@@ -19,6 +20,26 @@ export function SettingsPanel({ groups, proxies, run, error, onClose }: Props): 
   const [password, setPassword] = useState('')
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
+  const [checking, setChecking] = useState<Set<string>>(new Set())
+
+  const check = async (ids: string[]): Promise<void> => {
+    setChecking((prev) => new Set([...prev, ...ids]))
+    await run(() => (ids.length === 1 ? api.checkProxy(ids[0]) : api.checkProxies(ids)))
+    setChecking((prev) => {
+      const next = new Set(prev)
+      for (const id of ids) next.delete(id)
+      return next
+    })
+  }
+
+  const checkLabel = (x: ProxyView): string => {
+    if (checking.has(x.id)) return 'Đang kiểm tra…'
+    if (x.lastStatus === 'ok') {
+      return ['Sống', x.lastIp, x.lastCountry, x.lastTimezone].filter(Boolean).join(' · ')
+    }
+    if (x.lastStatus === 'fail') return `Lỗi: ${x.lastError ?? 'không rõ'}`
+    return 'Chưa kiểm tra'
+  }
 
   const addGroup = async (): Promise<void> => {
     const name = groupName.trim()
@@ -110,7 +131,15 @@ export function SettingsPanel({ groups, proxies, run, error, onClose }: Props): 
           </button>
         </div>
 
-        <h2 style={{ marginTop: 22 }}>Proxy</h2>
+        <div className="section-head">
+          <h2>Proxy</h2>
+          <button
+            disabled={proxies.length === 0 || checking.size > 0}
+            onClick={() => void check(proxies.map((x) => x.id))}
+          >
+            Kiểm tra tất cả
+          </button>
+        </div>
         {proxies.length === 0 && <p className="muted">Chưa có proxy.</p>}
         {proxies.map((x) => (
           <div className="list-item" key={x.id}>
@@ -123,7 +152,18 @@ export function SettingsPanel({ groups, proxies, run, error, onClose }: Props): 
                   {x.hasPassword ? ' · có mật khẩu' : ''}
                 </span>
               )}
+              <br />
+              <span
+                className={
+                  x.lastStatus === 'ok' ? 'check-ok' : x.lastStatus === 'fail' ? 'error' : 'muted'
+                }
+              >
+                {checkLabel(x)}
+              </span>
             </span>
+            <button disabled={checking.has(x.id)} onClick={() => void check([x.id])}>
+              Kiểm tra
+            </button>
             <button className="danger" onClick={() => void run(() => api.deleteProxy(x.id))}>
               Xoá
             </button>
@@ -158,6 +198,9 @@ export function SettingsPanel({ groups, proxies, run, error, onClose }: Props): 
             Thêm proxy
           </button>
         </div>
+
+        <h2 style={{ marginTop: 22 }}>Nhập nhiều proxy</h2>
+        <ProxyImport run={run} />
 
         <div className="dialog-actions">
           <button onClick={onClose}>Đóng</button>

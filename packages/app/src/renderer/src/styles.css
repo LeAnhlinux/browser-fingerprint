@@ -38,3 +38,12 @@ td.actions button { margin-left: 6px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .list-item { display: flex; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border); }
 .list-item .grow { flex: 1; }
+.section-head { display: flex; align-items: center; justify-content: space-between; margin-top: 22px; }
+.section-head h2 { margin: 0; }
+.check-ok { color: var(--ok); }
+.import-box textarea { width: 100%; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+.import-result { margin-top: 8px; }
+.import-result p { margin: 2px 0; }
+.bulk-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 10px; margin-bottom: 10px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
+.bulk-bar .grow { flex: 1; }
+td.check, th.check { width: 28px; padding-right: 0; }

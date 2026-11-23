@@ -1,8 +1,23 @@
 import type {
-  CoreInfo, Group, NewProfile, NewProxy, Profile, ProfileFilter, ProfilePatch, ProfileView, ProxyPatch, ProxyView, RunInfo,
-} from '@bf/core';
+  BulkCreateInput,
+  CoreInfo,
+  LocaleApplyResult,
+  ProxyImportResult,
+  ProxyProtocol,
+  Group,
+  NewProfile,
+  NewProxy,
+  Profile,
+  ProfileFilter,
+  ProfilePatch,
+  ProfileView,
+  ProxyPatch,
+  ProxyView,
+  RunInfo
+} from '@bf/core'
 
-const call = <T>(method: string, ...args: unknown[]): Promise<T> => window.bf.call(method, ...args) as Promise<T>;
+const call = <T>(method: string, ...args: unknown[]): Promise<T> =>
+  window.bf.call(method, ...args) as Promise<T>
 
 export const api = {
   info: () => call<CoreInfo>('info'),
@@ -19,11 +34,22 @@ export const api = {
   createProxy: (input: NewProxy) => call<ProxyView>('createProxy', input),
   updateProxy: (id: string, patch: ProxyPatch) => call<ProxyView>('updateProxy', id, patch),
   deleteProxy: (id: string) => call<void>('deleteProxy', id),
+  importProxies: (text: string, defaultProtocol: ProxyProtocol) =>
+    call<ProxyImportResult>('importProxies', text, defaultProtocol),
+  checkProxy: (id: string) => call<ProxyView>('checkProxy', id),
+  checkProxies: (ids: string[]) => call<void>('checkProxies', ids),
+  createProfilesBulk: (input: BulkCreateInput) => call<Profile[]>('createProfilesBulk', input),
+  updateProfilesBulk: (
+    ids: string[],
+    patch: { groupId?: string | null; proxyId?: string | null }
+  ) => call<number>('updateProfilesBulk', ids, patch),
+  assignUnusedProxies: (ids: string[]) => call<number>('assignUnusedProxies', ids),
+  applyProxyLocale: (ids: string[]) => call<LocaleApplyResult>('applyProxyLocale', ids),
   launch: (id: string) => call<RunInfo>('launch', id),
-  stop: (id: string) => call<void>('stop', id),
-};
+  stop: (id: string) => call<void>('stop', id)
+}
 
 export function cleanError(e: unknown): string {
-  const msg = e instanceof Error ? e.message : String(e);
-  return msg.replace(/^Error invoking remote method '[^']+': /, '').replace(/^\w*Error: /, '');
+  const msg = e instanceof Error ? e.message : String(e)
+  return msg.replace(/^Error invoking remote method '[^']+': /, '').replace(/^\w*Error: /, '')
 }
