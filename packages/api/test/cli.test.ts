@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { type CliIo, runCli } from '../src/cli';
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { type CliIo, runCli, writePrivateFile } from '../src/cli';
 import { ApiClient } from '../src/client';
 import { type ApiServer, startApiServer } from '../src/server';
 import { COOKIE_SECRET, type FakeCore, TOKEN, fakeCore } from './helpers';
@@ -140,5 +143,38 @@ describe('bf', () => {
     expect(await run('list')).toBe(1);
     expect(err).toEqual(['Lỗi: Không kết nối được tới app. Hãy mở Browser Fingerprint trước (API chỉ chạy khi app đang mở).']);
     server = await startApiServer({ core, token: TOKEN, port: 0 });
+  });
+});
+
+describe('writePrivateFile', () => {
+  const posix = process.platform !== 'win32';
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'bf-cli-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('ghi đè file cũ 0644 mà vẫn ra 0600', async () => {
+    const file = join(dir, 'cookies.json');
+    writeFileSync(file, 'cu');
+    chmodSync(file, 0o644);
+    await writePrivateFile(file, 'moi');
+    expect(readFileSync(file, 'utf8')).toBe('moi');
+    if (posix) expect(statSync(file).mode & 0o777).toBe(0o600);
+  });
+
+  it('tạo file mới với 0600 và không để lại file tạm', async () => {
+    const file = join(dir, 'moi.json');
+    await writePrivateFile(file, 'x');
+    expect(readFileSync(file, 'utf8')).toBe('x');
+    if (posix) expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(readdirSync(dir)).toEqual(['moi.json']);
+  });
+
+  it('lỗi thì không để lại file tạm và không đụng file đích', async () => {
+    await expect(writePrivateFile(join(dir, 'khong-co', 'a.json'), 'x')).rejects.toThrow();
+    expect(readdirSync(dir)).toEqual([]);
   });
 });

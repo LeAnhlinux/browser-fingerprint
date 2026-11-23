@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { readFile, writeFile } from 'node:fs/promises';
-import { runCli } from './cli';
+import { readFile } from 'node:fs/promises';
+import { runCli, writePrivateFile } from './cli';
 import { clientFromEnv } from './client';
 
 async function main(): Promise<number> {
@@ -16,8 +16,8 @@ async function main(): Promise<number> {
     out: (line) => console.log(line),
     err: (line) => console.error(line),
     readFile: (path) => readFile(path, 'utf8'),
-    // File cookie chứa phiên đăng nhập: chỉ chủ máy đọc được.
-    writeFile: (path, data) => writeFile(path, data, { mode: 0o600 }),
+    // File cookie chứa phiên đăng nhập: luôn 0600, kể cả khi ghi đè file cũ.
+    writeFile: writePrivateFile,
   });
 }
 

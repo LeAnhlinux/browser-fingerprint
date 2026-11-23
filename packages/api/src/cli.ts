@@ -1,3 +1,6 @@
+import { randomBytes } from 'node:crypto';
+import { rename, rm, writeFile } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import type { ProfileUpdate, ProfileView, ProxyView } from '@bf/core';
 import { type ApiClient, ApiError } from './client';
@@ -215,5 +218,21 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
     }
     io.err(`Lỗi: ${e instanceof Error ? e.message : 'không rõ'}`);
     return 1;
+  }
+}
+
+/**
+ * Ghi file chứa bí mật (cookie phiên đăng nhập) với quyền 0600 cả khi file đích đã tồn tại:
+ * ghi vào file tạm mới tạo độc quyền 0600 cùng thư mục rồi đổi tên đè lên đích,
+ * nên dữ liệu không bao giờ nằm trong file có quyền rộng hơn.
+ */
+export async function writePrivateFile(path: string, data: string): Promise<void> {
+  const tmp = join(dirname(path), `.${basename(path)}.${randomBytes(6).toString('hex')}.tmp`);
+  try {
+    await writeFile(tmp, data, { mode: 0o600, flag: 'wx' });
+    await rename(tmp, path);
+  } catch (e) {
+    await rm(tmp, { force: true });
+    throw e;
   }
 }
