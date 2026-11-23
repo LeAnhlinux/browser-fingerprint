@@ -72,6 +72,12 @@ describe('ProfileStore', () => {
     expect(store.getProfile(p.id)!.proxyId).toBeNull();
   });
 
+  it('patch bỏ qua khoá nằm trên prototype như constructor', () => {
+    const p = store.createProfile({ name: 'a' });
+    const updated = store.updateProfile(p.id, { constructor: 'x', toString: 'y', name: 'b' } as never);
+    expect(updated.name).toBe('b');
+  });
+
   it('markLaunched ghi phiên bản nhân và thời điểm', () => {
     const p = store.createProfile({ name: 'a' });
     store.markLaunched(p.id, '148.0.7778.215');

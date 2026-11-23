@@ -76,7 +76,10 @@ describe('dấu vân tay với nhân thật', () => {
     const [ra, rb] = await Promise.all([core.launch(a.id), core.launch(b.id)]);
     const [ha, hb] = await Promise.all([evaluate(ra.cdpPort, CANVAS_HASH), evaluate(rb.cdpPort, CANVAS_HASH)]);
     await Promise.all([core.stop(a.id), core.stop(b.id)]);
-    expect(typeof ha).toBe('string');
+    for (const h of [ha, hb]) {
+      expect(typeof h).toBe('string');
+      expect((h as string).length).toBeGreaterThan(0);
+    }
     expect(ha).not.toBe(hb);
   });
 
@@ -86,6 +89,10 @@ describe('dấu vân tay với nhân thật', () => {
     await core.stop(p.id);
     const second = await evaluate((await core.launch(p.id)).cdpPort, CANVAS_HASH);
     await core.stop(p.id);
+    for (const h of [first, second]) {
+      expect(typeof h).toBe('string');
+      expect((h as string).length).toBeGreaterThan(0);
+    }
     expect(second).toBe(first);
   });
 

@@ -96,6 +96,8 @@ async function waitForCdpFile(dir: string, timeoutMs: number, signal: AbortSigna
 export class Launcher extends EventEmitter {
   private runs = new Map<string, Entry>();
   private starting = new Set<string>();
+  private inflight = new Set<Promise<unknown>>();
+  private closing = false;
   private exitCodes = new Map<string, number | null>();
 
   constructor(private deps: LauncherDeps) {
@@ -115,7 +117,18 @@ export class Launcher extends EventEmitter {
     return this.runs.has(profileId) || this.starting.has(profileId);
   }
 
-  async launch(profileId: string): Promise<RunInfo> {
+  launch(profileId: string): Promise<RunInfo> {
+    if (this.closing) return Promise.reject(new LaunchError('Ứng dụng đang thoát'));
+    const p = this.doLaunch(profileId);
+    this.inflight.add(p);
+    const done = (): void => {
+      this.inflight.delete(p);
+    };
+    p.then(done, done);
+    return p;
+  }
+
+  private async doLaunch(profileId: string): Promise<RunInfo> {
     if (this.runs.has(profileId) || this.starting.has(profileId)) throw new LaunchError('Hồ sơ đang chạy');
     this.starting.add(profileId);
     let bridge: BridgeLike | null = null;
@@ -127,8 +140,6 @@ export class Launcher extends EventEmitter {
       const exe = this.deps.engine.executablePath();
       if (!exe) throw new LaunchError('Chưa cài nhân trình duyệt');
       const dir = join(this.deps.profilesDir, profileId);
-      await mkdir(dir, { recursive: true });
-      await rm(join(dir, CDP_FILE), { force: true });
       const args = [
         `--user-data-dir=${dir}`,
         ...fingerprintArgs(profile),
@@ -154,6 +165,9 @@ export class Launcher extends EventEmitter {
         });
         args.push(`--proxy-server=${bridge.url}`);
       }
+      // Chỉ tạo thư mục dữ liệu sau khi các kiểm tra proxy đã qua.
+      await mkdir(dir, { recursive: true });
+      await rm(join(dir, CDP_FILE), { force: true });
       child = (this.deps.spawnImpl ?? spawn)(exe, args, { stdio: 'ignore' });
       const spawned = child;
       let exited = false;
@@ -230,6 +244,9 @@ export class Launcher extends EventEmitter {
   }
 
   async stopAll(): Promise<void> {
+    this.closing = true;
+    // Chờ các lần khởi chạy dở dang xong (thành công thì đã đăng ký, thất bại thì đã tự dọn) rồi mới dừng.
+    await Promise.allSettled([...this.inflight]);
     await Promise.all([...this.runs.keys()].map((id) => this.stop(id)));
   }
 

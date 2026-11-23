@@ -21,6 +21,31 @@ export interface CoreOptions {
   launcherOverrides?: Partial<LauncherDeps>;
 }
 
+// Quy tắc host (giữ đơn giản): sau khi cắt khoảng trắng phải không rỗng và là tên miền
+// (chữ, số, '.', '-', '_'), IPv4, hoặc IPv6 không ngoặc vuông (chỉ chữ số hex, ':' và '.', có ít nhất hai dấu ':').
+// Không khoảng trắng, '/', '@'; dấu ':' chỉ được có trong IPv6.
+const HOSTNAME_RE = /^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$/;
+const IPV6_RE = /^[0-9A-Fa-f:.]+$/;
+
+function normalizeHost(host: unknown): string {
+  const h = typeof host === 'string' ? host.trim() : '';
+  const ok = h.includes(':') ? IPV6_RE.test(h) && h.split(':').length >= 3 : HOSTNAME_RE.test(h);
+  if (!ok) throw new Error('Máy chủ proxy không hợp lệ');
+  return h;
+}
+
+function checkProtocol(protocol: unknown): ProxyProtocol {
+  if (protocol !== 'http' && protocol !== 'socks5') throw new Error('Giao thức proxy không hợp lệ');
+  return protocol;
+}
+
+function checkPort(port: unknown): number {
+  if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error('Cổng proxy phải là số nguyên từ 1 đến 65535');
+  }
+  return port;
+}
+
 function toProxyView(x: Proxy): ProxyView {
   const { passwordEncrypted, ...rest } = x;
   return { ...rest, hasPassword: passwordEncrypted !== null };
@@ -79,12 +104,29 @@ export class Core extends EventEmitter {
     return this.store.listProfiles(filter).map((p) => ({ ...p, run: this.launcher.status(p.id) }));
   }
 
+  private checkProfileRefs(patch: { name?: string; proxyId?: string | null; groupId?: string | null }): void {
+    if (patch.proxyId && !this.store.getProxy(patch.proxyId)) throw new Error('Không tìm thấy proxy');
+    if (patch.groupId && !this.store.listGroups().some((g) => g.id === patch.groupId)) throw new Error('Không tìm thấy nhóm');
+  }
+
+  private cleanName(name: unknown): string {
+    const n = typeof name === 'string' ? name.trim() : '';
+    if (!n) throw new Error('Tên hồ sơ không được để trống');
+    return n;
+  }
+
   createProfile(input: NewProfile): Profile {
-    return this.store.createProfile(input);
+    const name = this.cleanName(input.name);
+    this.checkProfileRefs(input);
+    return this.store.createProfile({ ...input, name });
   }
 
   updateProfile(id: string, patch: ProfilePatch): Profile {
-    return this.store.updateProfile(id, patch);
+    if (!this.store.getProfile(id)) throw new Error('Không tìm thấy hồ sơ');
+    const next = { ...patch };
+    if (patch.name !== undefined) next.name = this.cleanName(patch.name);
+    this.checkProfileRefs(patch);
+    return this.store.updateProfile(id, next);
   }
 
   deleteProfile(id: string): void {
@@ -117,26 +159,46 @@ export class Core extends EventEmitter {
   }
 
   createProxy(input: NewProxy): ProxyView {
+    const protocol = checkProtocol(input.protocol);
+    const host = normalizeHost(input.host);
+    const port = checkPort(input.port);
+    const username = input.username || null;
+    if (input.password && !username) throw new Error('Cần tài khoản khi có mật khẩu');
     return toProxyView(
       this.store.createProxy({
-        protocol: input.protocol,
-        host: input.host,
-        port: input.port,
-        username: input.username || null,
+        protocol,
+        host,
+        port,
+        username,
         passwordEncrypted: input.password ? this.secrets.encrypt(input.password) : null,
       }),
     );
   }
 
   updateProxy(id: string, patch: ProxyPatch): ProxyView {
-    const { password, ...rest } = patch;
-    const dbPatch: Partial<Omit<Proxy, 'id'>> = { ...rest };
-    if ('username' in patch) dbPatch.username = patch.username || null;
-    if (password !== undefined) dbPatch.passwordEncrypted = password ? this.secrets.encrypt(password) : null;
+    const current = this.store.getProxy(id);
+    if (!current) throw new Error('Không tìm thấy proxy');
+    // Danh sách trường cho phép: không bao giờ trải nguyên đối tượng của người gọi vào DB.
+    const dbPatch: Partial<Omit<Proxy, 'id'>> = {};
+    if (patch.protocol !== undefined) dbPatch.protocol = checkProtocol(patch.protocol);
+    if (patch.host !== undefined) dbPatch.host = normalizeHost(patch.host);
+    if (patch.port !== undefined) dbPatch.port = checkPort(patch.port);
+    if (patch.username !== undefined) dbPatch.username = patch.username || null;
+    if (patch.password !== undefined) {
+      dbPatch.passwordEncrypted = patch.password ? this.secrets.encrypt(patch.password) : null;
+    }
+    const username = 'username' in dbPatch ? dbPatch.username : current.username;
+    const passwordEncrypted = 'passwordEncrypted' in dbPatch ? dbPatch.passwordEncrypted : current.passwordEncrypted;
+    if (passwordEncrypted && !username) throw new Error('Cần tài khoản khi có mật khẩu');
     return toProxyView(this.store.updateProxy(id, dbPatch));
   }
 
   deleteProxy(id: string): void {
+    if (!this.store.getProxy(id)) throw new Error('Không tìm thấy proxy');
+    const users = this.store.listProfiles().filter((p) => p.proxyId === id);
+    if (users.length > 0) {
+      throw new Error(`Proxy đang được dùng bởi hồ sơ: ${users.map((p) => p.name).join(', ')}. Hãy đổi proxy của các hồ sơ đó trước.`);
+    }
     this.store.deleteProxy(id);
   }
 

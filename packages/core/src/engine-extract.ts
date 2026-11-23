@@ -40,7 +40,22 @@ async function extractDmg(dmg: string, dest: string): Promise<string> {
 }
 
 async function extractZip(zip: string, dest: string): Promise<string> {
-  await run('tar', ['-xf', zip, '-C', dest]);
+  if (process.platform === 'win32') {
+    // Git for Windows có thể đặt GNU tar lên trước trong PATH và nó không đọc được zip,
+    // nên gọi bsdtar của hệ thống bằng đường dẫn tuyệt đối; lỗi thì dùng PowerShell.
+    const tar = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+    try {
+      await run(tar, ['-xf', zip, '-C', dest]);
+    } catch {
+      const q = (v: string): string => `'${v.replace(/'/g, "''")}'`;
+      await run('powershell', [
+        '-NoProfile', '-NonInteractive', '-Command',
+        `Expand-Archive -LiteralPath ${q(zip)} -DestinationPath ${q(dest)} -Force`,
+      ]);
+    }
+  } else {
+    await run('tar', ['-xf', zip, '-C', dest]);
+  }
   const exe = await findFile(dest, 'chrome.exe');
   if (!exe) throw new Error('Không tìm thấy chrome.exe trong file zip');
   return exe;

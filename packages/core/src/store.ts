@@ -70,7 +70,7 @@ export class ProfileStore {
   }
 
   private patch(table: string, cols: Record<string, string>, id: string, patch: Record<string, unknown>): void {
-    const keys = Object.keys(patch).filter((k) => k in cols && patch[k] !== undefined);
+    const keys = Object.keys(patch).filter((k) => Object.hasOwn(cols, k) && patch[k] !== undefined);
     if (keys.length === 0) return;
     const sets = keys.map((k) => `${cols[k]} = ?`).join(', ');
     const values = keys.map((k) => patch[k] as string | number | null);

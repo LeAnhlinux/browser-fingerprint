@@ -104,6 +104,7 @@ describe('Launcher', () => {
     await expect(l.launch(p.id)).rejects.toThrow('Proxy 9.9.9.9:8080 không kết nối được');
     expect(sp.calls.length).toBe(0);
     expect(l.status(p.id)).toBeNull();
+    expect(existsSync(join(profilesDir, p.id))).toBe(false);
   });
 
   it('nhân thoát thì trạng thái về dừng, đóng cầu proxy, phát sự kiện', async () => {
@@ -239,5 +240,31 @@ describe('Launcher', () => {
     expect(l.isActive(p.id)).toBe(true);
     await l.stop(p.id);
     expect(l.isActive(p.id)).toBe(false);
+  });
+  it('stopAll khi đang khởi chạy dở: chờ, dừng nhân đã sinh, từ chối lần mở sau', async () => {
+    const p = store.createProfile({ name: 'a' });
+    const q = store.createProfile({ name: 'b' });
+    const delayed: { child: FakeChild }[] = [];
+    const impl = ((_exe: string, args: string[]) => {
+      const child = new FakeChild();
+      delayed.push({ child });
+      const dir = args.find((a) => a.startsWith('--user-data-dir='))!.slice('--user-data-dir='.length);
+      setTimeout(() => writeFileSync(join(dir, 'DevToolsActivePort'), '9333\n/devtools/browser/abc\n'), 150);
+      return child;
+    }) as unknown as typeof spawn;
+    const l = new Launcher({ ...deps, spawnImpl: impl });
+    const pending = l.launch(p.id);
+    const settled = pending.then(() => 'ok', () => 'err');
+    await new Promise((r) => setTimeout(r, 30));
+    expect(l.status(p.id)).toBeNull();
+    await l.stopAll();
+    expect(delayed).toHaveLength(1);
+    expect(delayed[0].child.killed).toBe(true);
+    expect(l.status(p.id)).toBeNull();
+    expect(l.isActive(p.id)).toBe(false);
+    await settled;
+    await expect(l.launch(q.id)).rejects.toThrow('Ứng dụng đang thoát');
+    await expect(l.launch(q.id)).rejects.toThrow(LaunchError);
+    expect(delayed).toHaveLength(1);
   });
 });
