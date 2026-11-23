@@ -1,0 +1,20 @@
+{
+  "name": "@bf/core",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:engine": "vitest run --config vitest.engine.config.ts"
+  },
+  "dependencies": {
+    "proxy-chain": "^3.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.1"
+  }
+}
