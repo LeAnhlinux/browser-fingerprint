@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -47,6 +47,16 @@ describe('token', () => {
     chmodSync(file, 0o644);
     expect(loadOrCreateToken(file)).toBe(fresh);
     if (posix) expect(statSync(file).mode & 0o777).toBe(0o600);
+  });
+
+  it('file hỏng quyền lỏng được thay bằng token mới quyền 0600, không để lại file tạm', () => {
+    writeFileSync(file, 'không phải token');
+    chmodSync(file, 0o644);
+    const fresh = loadOrCreateToken(file);
+    expect(fresh).toMatch(/^[0-9a-f]{64}$/);
+    expect(readFileSync(file, 'utf8').trim()).toBe(fresh);
+    if (posix) expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(readdirSync(dir)).toEqual(['api-token']);
   });
 
   it('readToken báo lỗi rõ khi thiếu hoặc sai dạng, không tự tạo file', () => {

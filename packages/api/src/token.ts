@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 export const DEFAULT_PORT = 47800;
 const APP_DIR_NAME = 'Browser Fingerprint';
@@ -33,12 +33,14 @@ function readValid(file: string): string | null {
 function restrict(file: string): void {
   try {
     chmodSync(file, 0o600);
-  } catch {
-    // Windows không có quyền kiểu POSIX; bỏ qua.
+  } catch (e) {
+    // Windows: bảo vệ dựa vào ACL riêng của thư mục dữ liệu, chmod không đổi ACL.
+    if (process.platform === 'win32') return;
+    throw new Error(`Không đặt được quyền riêng tư cho file token tại ${file} (${(e as NodeJS.ErrnoException).code ?? 'lỗi không rõ'})`);
   }
 }
 
-/** Phía app: đọc token đang có, hoặc sinh mới. File luôn được siết về quyền 0600. */
+/** Phía app: đọc token đang có, hoặc sinh mới. Token mới không bao giờ nằm trong file có quyền rộng hơn 0600. */
 export function loadOrCreateToken(file: string): string {
   const existing = readValid(file);
   if (existing) {
@@ -46,8 +48,15 @@ export function loadOrCreateToken(file: string): string {
     return existing;
   }
   const token = randomBytes(32).toString('hex');
-  writeFileSync(file, `${token}\n`, { mode: 0o600 });
-  restrict(file);
+  // Ghi vào file tạm mới (tạo độc quyền, 0600) rồi đổi tên đè lên đích: không bao giờ ghi vào inode cũ có quyền lỏng.
+  const tmp = join(dirname(file), `.api-token.${randomBytes(6).toString('hex')}.tmp`);
+  try {
+    writeFileSync(tmp, `${token}\n`, { mode: 0o600, flag: 'wx' });
+    renameSync(tmp, file);
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    throw e;
+  }
   return token;
 }
 
