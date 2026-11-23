@@ -228,4 +228,16 @@ describe('Launcher', () => {
     expect(l.status(p.id)).toBeNull();
     expect(changes.length).toBe(2);
   });
+
+  it('isActive đúng khi đang khởi chạy, đang chạy và sau khi dừng', async () => {
+    const p = store.createProfile({ name: 'a' });
+    const l = new Launcher(deps);
+    expect(l.isActive(p.id)).toBe(false);
+    const pending = l.launch(p.id);
+    expect(l.isActive(p.id)).toBe(true);
+    await pending;
+    expect(l.isActive(p.id)).toBe(true);
+    await l.stop(p.id);
+    expect(l.isActive(p.id)).toBe(false);
+  });
 });

@@ -1,6 +1,6 @@
 import type { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -14,9 +14,12 @@ class FakeChild extends EventEmitter {
     return true;
   }
 }
+let cdpDelayMs = 0;
 const spawnImpl = ((_exe: string, args: string[]) => {
   const dir = args.find((a) => a.startsWith('--user-data-dir='))!.slice('--user-data-dir='.length);
-  writeFileSync(join(dir, 'DevToolsActivePort'), '9333\n/devtools/browser/abc\n');
+  const write = () => writeFileSync(join(dir, 'DevToolsActivePort'), '9333\n/devtools/browser/abc\n');
+  if (cdpDelayMs > 0) setTimeout(write, cdpDelayMs);
+  else write();
   return new FakeChild();
 }) as unknown as typeof spawn;
 
@@ -24,6 +27,7 @@ let dataDir: string;
 let core: Core;
 
 beforeEach(async () => {
+  cdpDelayMs = 0;
   dataDir = mkdtempSync(join(tmpdir(), 'bf-core-'));
   core = new Core({
     dataDir,
@@ -86,5 +90,37 @@ describe('Core', () => {
     await core.stop(p.id);
     await new Promise((r) => setTimeout(r, 20));
     expect(n).toBe(2);
+  });
+
+  it('xoá hồ sơ với mã không tồn tại hoặc mã đường dẫn thì báo lỗi và không đụng đĩa', async () => {
+    const other = core.createProfile({ name: 'b' });
+    await core.launch(other.id);
+    await core.stop(other.id);
+    await new Promise((r) => setTimeout(r, 20));
+    const sentinel = join(dataDir, 'sentinel.txt');
+    writeFileSync(sentinel, 'x');
+    mkdirSync(join(dataDir, 'profiles', 'x'), { recursive: true });
+    for (const bad of ['..', '', '../x', '.', crypto.randomUUID()]) {
+      expect(() => core.deleteProfile(bad), `id=${JSON.stringify(bad)}`).toThrow('Không tìm thấy hồ sơ');
+    }
+    expect(existsSync(sentinel)).toBe(true);
+    expect(existsSync(join(dataDir, 'profiles', 'x'))).toBe(true);
+    expect(existsSync(join(dataDir, 'profiles', other.id))).toBe(true);
+    expect(core.listProfiles()).toHaveLength(1);
+  });
+
+  it('từ chối xoá hồ sơ khi lần khởi chạy còn đang dở', async () => {
+    cdpDelayMs = 150;
+    const p = core.createProfile({ name: 'a' });
+    const pending = core.launch(p.id);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(core.listProfiles()[0].run).toBeNull();
+    expect(() => core.deleteProfile(p.id)).toThrow('Hãy dừng hồ sơ trước khi xoá');
+    expect(existsSync(join(dataDir, 'profiles', p.id))).toBe(true);
+    await pending;
+    await core.stop(p.id);
+    await new Promise((r) => setTimeout(r, 20));
+    core.deleteProfile(p.id);
+    expect(core.listProfiles()).toEqual([]);
   });
 });

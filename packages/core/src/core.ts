@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { mkdirSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { EngineManager, type EngineOptions } from './engine';
 import { hostPlatform } from './fingerprint';
 import { Launcher, type LauncherDeps, type RunInfo } from './launcher';
@@ -56,8 +56,11 @@ export class Core extends EventEmitter {
   }
 
   async shutdown(): Promise<void> {
-    await this.launcher.stopAll();
-    this.store.close();
+    try {
+      await this.launcher.stopAll();
+    } finally {
+      this.store.close();
+    }
   }
 
   info(): CoreInfo {
@@ -85,9 +88,12 @@ export class Core extends EventEmitter {
   }
 
   deleteProfile(id: string): void {
-    if (this.launcher.status(id)) throw new Error('Hãy dừng hồ sơ trước khi xoá');
+    if (!this.store.getProfile(id)) throw new Error('Không tìm thấy hồ sơ');
+    if (this.launcher.isActive(id)) throw new Error('Hãy dừng hồ sơ trước khi xoá');
+    const dir = resolve(this.profilesDir, id);
+    if (dirname(dir) !== resolve(this.profilesDir)) throw new Error('Mã hồ sơ không hợp lệ');
     this.store.deleteProfile(id);
-    rmSync(join(this.profilesDir, id), { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true });
   }
 
   listGroups(): Group[] {

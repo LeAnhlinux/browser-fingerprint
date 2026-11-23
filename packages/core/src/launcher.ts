@@ -110,6 +110,11 @@ export class Launcher extends EventEmitter {
     return this.runs.get(profileId)?.info ?? null;
   }
 
+  /** Đang chạy hoặc đang trong quá trình khởi chạy. */
+  isActive(profileId: string): boolean {
+    return this.runs.has(profileId) || this.starting.has(profileId);
+  }
+
   async launch(profileId: string): Promise<RunInfo> {
     if (this.runs.has(profileId) || this.starting.has(profileId)) throw new LaunchError('Hồ sơ đang chạy');
     this.starting.add(profileId);
