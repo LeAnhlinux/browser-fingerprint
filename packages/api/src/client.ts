@@ -15,8 +15,13 @@ export interface ApiClientOptions {
   /** Chuỗi token, hoặc hàm trả token (được gọi lại ở mỗi request). */
   token: string | (() => string);
   port?: number;
+  /** Thời gian chờ tối đa cho một request, tính bằng mili giây. Mặc định 120 giây. */
+  timeoutMs?: number;
 }
 
+const REQUEST_TIMEOUT_MS = 120_000;
+const TIMED_OUT = 'App không trả lời kịp thời gian';
+const BAD_REPLY = 'Máy chủ API trả lời không hợp lệ';
 const NOT_RUNNING = 'Không kết nối được tới app. Hãy mở Browser Fingerprint trước (API chỉ chạy khi app đang mở).';
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -26,10 +31,12 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 export class ApiClient {
   private base: string;
   private token: string | (() => string);
+  private timeoutMs: number;
 
   constructor(opts: ApiClientOptions) {
     this.base = `http://127.0.0.1:${opts.port ?? DEFAULT_PORT}/v1`;
     this.token = opts.token;
+    this.timeoutMs = opts.timeoutMs ?? REQUEST_TIMEOUT_MS;
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -39,14 +46,21 @@ export class ApiClient {
     } catch (err) {
       throw new ApiError(err instanceof Error ? err.message : 'Không đọc được token của API', 0);
     }
+    // Token chỉ gửi tới đúng địa chỉ này: không theo chuyển hướng, không chờ vô hạn.
+    const signal = AbortSignal.timeout(this.timeoutMs);
     let res: Response;
     try {
       res = await fetch(`${this.base}${path}`, {
         method,
+        redirect: 'error',
+        signal,
         headers: { Authorization: `Bearer ${token}`, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
         body: body !== undefined ? JSON.stringify(body) : undefined,
       });
-    } catch {
+    } catch (err) {
+      if (signal.aborted) throw new ApiError(TIMED_OUT, 0);
+      const cause = isRecord(err) && isRecord(err.cause) ? err.cause : undefined;
+      if (typeof cause?.message === 'string' && cause.message.includes('redirect')) throw new ApiError(BAD_REPLY, 0);
       throw new ApiError(NOT_RUNNING, 0);
     }
     let data: unknown = null;
@@ -55,6 +69,7 @@ export class ApiClient {
     } catch {
       data = null;
     }
+    if (signal.aborted) throw new ApiError(TIMED_OUT, 0);
     if (!res.ok) throw new ApiError(isRecord(data) && typeof data.error === 'string' ? data.error : `Lỗi HTTP ${res.status}`, res.status);
     return data as T;
   }

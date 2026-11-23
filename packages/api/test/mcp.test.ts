@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, truncateSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -11,29 +11,21 @@ import { COOKIE_SECRET, type FakeCore, TOKEN, fakeCore } from './helpers';
 
 let core: FakeCore;
 let server: ApiServer;
-let files: Map<string, string>;
+let tmp: string;
+let filesDir: string;
 let handle: (message: unknown) => Promise<unknown | null>;
 
 beforeEach(async () => {
   core = fakeCore();
   server = await startApiServer({ core, token: TOKEN, port: 0 });
-  files = new Map();
-  handle = createMcpHandler({
-    client: new ApiClient({ token: TOKEN, port: server.port }),
-    readFile: async (path) => {
-      const data = files.get(path);
-      if (data === undefined) throw new Error('ENOENT');
-      return data;
-    },
-    writeNewFile: async (path, data) => {
-      if (files.has(path)) throw Object.assign(new Error('EEXIST'), { code: 'EEXIST' });
-      files.set(path, data);
-    },
-  });
+  tmp = mkdtempSync(join(tmpdir(), 'bf-mcp-files-'));
+  filesDir = join(tmp, 'mcp-files');
+  handle = createMcpHandler({ client: new ApiClient({ token: TOKEN, port: server.port }), filesDir });
 });
 
 afterEach(async () => {
   await server.close();
+  rmSync(tmp, { recursive: true, force: true });
 });
 
 let seq = 0;
@@ -121,33 +113,113 @@ describe('MCP: công cụ', () => {
   it('lỗi lập trình không lộ chi tiết trong kết quả', async () => {
     const leaky = createMcpHandler({
       client: { listGroups: () => { throw new Error('chi tiết nội bộ bí mật'); } } as unknown as ApiClient,
-      readFile: async () => '',
-      writeNewFile: async () => {},
+      filesDir: '/khong/dung/toi',
     });
     const res: any = await leaky({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'list_groups' } });
     expect(res.result).toMatchObject({ isError: true, content: [{ text: 'Lỗi nội bộ của MCP server' }] });
   });
 
-  it('export_cookies ghi ra file và không trả giá trị cookie về cho mô hình', async () => {
+  const posix = process.platform !== 'win32';
+  const cookieCalls = (): unknown[] => core.calls.filter((c) => c[0] === 'exportCookies' || c[0] === 'importCookies');
+
+  it.skipIf(!posix)('thư mục file của MCP được tạo 0700 lần đầu dùng và được siết về 0700 nếu đã có', async () => {
     await call('create_profile', { name: 'a' });
-    const res = await call('export_cookies', { id: 'p1', filePath: '/tmp/out.json' });
-    expect(res.data).toEqual({ count: 1, filePath: '/tmp/out.json' });
-    expect(res.text).not.toContain(COOKIE_SECRET);
-    expect(files.get('/tmp/out.json')).toContain(COOKIE_SECRET);
-    expect(await call('export_cookies', { id: 'p1', filePath: '/tmp/out.json' })).toMatchObject({ isError: true, text: 'File đã tồn tại, hãy chọn đường dẫn khác: /tmp/out.json' });
-    expect(await call('export_cookies', { id: 'p1', filePath: 'tuong-doi.json' })).toMatchObject({ isError: true, text: 'filePath phải là đường dẫn tuyệt đối' });
-    expect(await call('export_cookies', { id: 'p1' })).toMatchObject({ isError: true, text: 'Thiếu tham số: filePath' });
+    expect(existsSync(filesDir)).toBe(false);
+    await call('export_cookies', { id: 'p1', fileName: 'a.json' });
+    expect(statSync(filesDir).mode & 0o777).toBe(0o700);
+    chmodSync(filesDir, 0o755);
+    await call('export_cookies', { id: 'p1', fileName: 'b.json' });
+    expect(statSync(filesDir).mode & 0o777).toBe(0o700);
   });
 
-  it('import_cookies đọc từ file; kết quả không chứa nội dung file', async () => {
+  it('export_cookies ghi file trong thư mục, trả đường dẫn đầy đủ và không trả giá trị cookie', async () => {
     await call('create_profile', { name: 'a' });
-    files.set('/tmp/in.json', `[{"name":"sid","value":"${COOKIE_SECRET}"}]`);
-    const res = await call('import_cookies', { id: 'p1', filePath: '/tmp/in.json' });
+    const target = join(filesDir, 'out.json');
+    const res = await call('export_cookies', { id: 'p1', fileName: 'out.json' });
+    expect(res.data).toEqual({ count: 1, filePath: target });
+    expect(res.text).not.toContain(COOKIE_SECRET);
+    expect(readFileSync(target, 'utf8')).toContain(COOKIE_SECRET);
+    if (posix) expect(statSync(target).mode & 0o777).toBe(0o600);
+    expect(await call('export_cookies', { id: 'p1' })).toMatchObject({ isError: true, text: 'Thiếu tham số: fileName' });
+    expect(await call('export_cookies', { id: 'p1', fileName: 5 })).toMatchObject({ isError: true, text: 'Thiếu tham số: fileName' });
+  });
+
+  it('export_cookies không ghi đè file đã có và không gọi app khi đích đã bị chiếm', async () => {
+    await call('create_profile', { name: 'a' });
+    mkdirSync(filesDir, { recursive: true });
+    writeFileSync(join(filesDir, 'co-san.json'), 'noi dung cu');
+    const res = await call('export_cookies', { id: 'p1', fileName: 'co-san.json' });
+    expect(res).toMatchObject({ isError: true, text: `File đã tồn tại, hãy chọn tên khác: ${join(filesDir, 'co-san.json')}` });
+    expect(readFileSync(join(filesDir, 'co-san.json'), 'utf8')).toBe('noi dung cu');
+    expect(core.calls.filter((c) => c[0] === 'exportCookies')).toEqual([]);
+  });
+
+  it.skipIf(!posix)('export_cookies không đi theo liên kết ở thành phần cuối, kể cả liên kết treo', async () => {
+    await call('create_profile', { name: 'a' });
+    mkdirSync(filesDir, { recursive: true });
+    const outside = join(tmp, 'ngoai.json');
+    symlinkSync(outside, join(filesDir, 'link.json'));
+    expect(await call('export_cookies', { id: 'p1', fileName: 'link.json' })).toMatchObject({ isError: true });
+    expect(existsSync(outside)).toBe(false);
+    expect(core.calls.filter((c) => c[0] === 'exportCookies')).toEqual([]);
+  });
+
+  it('export_cookies lỗi ở app (hồ sơ không có) thì không để lại file', async () => {
+    const res = await call('export_cookies', { id: 'khong-co', fileName: 'x.json' });
+    expect(res).toMatchObject({ isError: true, text: 'Không tìm thấy hồ sơ' });
+    expect(existsSync(join(filesDir, 'x.json'))).toBe(false);
+    expect(readdirSync(filesDir)).toEqual([]);
+  });
+
+  const BAD_NAMES = [
+    '../x.json', 'a/b.json', '/etc/passwd', '/tmp/abs.json', '..', '.', '.an.json', '.', 'a\\b.json', 'C:\\x.json', 'a..\\x',
+    'a'.repeat(101), '', 'co khoang.json', 'a\nb.json', 'a\0b.json', 'tên.json', 'a:stream', 'ket-thuc-cham.', 'con', 'NUL.json', 'com1.txt', 'LPT9',
+  ];
+
+  it('fileName có dấu phân cách, .., dấu chấm đầu, gạch ngược, đường dẫn tuyệt đối, quá dài hoặc tên thiết bị bị từ chối và app không bị gọi', async () => {
+    await call('create_profile', { name: 'a' });
+    core.calls.length = 0;
+    for (const fileName of BAD_NAMES) {
+      for (const tool of ['export_cookies', 'import_cookies']) {
+        const res = await call(tool, { id: 'p1', fileName });
+        expect(res.isError, `${tool} ${JSON.stringify(fileName)}`).toBe(true);
+        expect(res.text, `${tool} ${JSON.stringify(fileName)}`).toMatch(/^(fileName không hợp lệ|Thiếu tham số: fileName)/);
+      }
+    }
+    expect(cookieCalls()).toEqual([]);
+    expect(existsSync(filesDir)).toBe(false);
+    expect(readdirSync(tmp)).toEqual([]);
+  });
+
+  it('fileName hợp lệ ở mức biên được chấp nhận', async () => {
+    await call('create_profile', { name: 'a' });
+    for (const fileName of ['a', 'a.b-c_d.json', 'x'.repeat(100), 'console.json', 'a..b']) {
+      expect((await call('export_cookies', { id: 'p1', fileName })).isError, fileName).toBe(false);
+    }
+  });
+
+  it('import_cookies đọc file trong thư mục; kết quả không chứa nội dung file', async () => {
+    await call('create_profile', { name: 'a' });
+    mkdirSync(filesDir, { recursive: true });
+    writeFileSync(join(filesDir, 'in.json'), `[{"name":"sid","value":"${COOKIE_SECRET}"}]`);
+    const res = await call('import_cookies', { id: 'p1', fileName: 'in.json' });
     expect(res.data).toMatchObject({ imported: 1, failed: 0 });
     expect(res.text).not.toContain(COOKIE_SECRET);
     expect(core.lastCookieText).toContain(COOKIE_SECRET);
-    expect(await call('import_cookies', { id: 'p1', filePath: '/tmp/khong-co.json' })).toMatchObject({ isError: true, text: 'Không đọc được file: /tmp/khong-co.json' });
-    expect(await call('import_cookies', { id: 'p1', filePath: 'in.json' })).toMatchObject({ isError: true, text: 'filePath phải là đường dẫn tuyệt đối' });
+    expect(await call('import_cookies', { id: 'p1', fileName: 'khong-co.json' })).toMatchObject({ isError: true, text: `Không đọc được file: ${join(filesDir, 'khong-co.json')}` });
+    expect(await call('import_cookies', { id: 'p1' })).toMatchObject({ isError: true, text: 'Thiếu tham số: fileName' });
+  });
+
+  it.skipIf(!posix)('import_cookies từ chối liên kết trong thư mục, dù trỏ tới file thật', async () => {
+    await call('create_profile', { name: 'a' });
+    mkdirSync(filesDir, { recursive: true });
+    const outside = join(tmp, 'ngoai.json');
+    writeFileSync(outside, `[{"name":"sid","value":"${COOKIE_SECRET}"}]`);
+    symlinkSync(outside, join(filesDir, 'link.json'));
+    const res = await call('import_cookies', { id: 'p1', fileName: 'link.json' });
+    expect(res).toMatchObject({ isError: true, text: `Không đọc được file: ${join(filesDir, 'link.json')}` });
+    expect(core.lastCookieText).not.toContain(COOKIE_SECRET);
+    expect(core.calls.filter((c) => c[0] === 'importCookies')).toEqual([]);
   });
 
   it('nhóm, proxy, kiểm tra proxy', async () => {
@@ -226,9 +298,10 @@ describe('readCookieFile: đường dẫn do mô hình chỉ định', () => {
     if (fifo) await expect(readCookieFile(join(dir, 'f'))).rejects.toThrow();
   });
 
-  it('import_cookies báo lỗi cố định khi đường dẫn không đọc được', async () => {
-    const real = createMcpHandler({ client: {} as ApiClient, readFile: readCookieFile, writeNewFile: async () => {} });
-    const res: any = await real({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'import_cookies', arguments: { id: 'p1', filePath: dir } } });
-    expect(res.result).toMatchObject({ isError: true, content: [{ text: `Không đọc được file: ${dir}` }] });
+  it('import_cookies báo lỗi cố định khi tên trỏ tới thư mục', async () => {
+    mkdirSync(join(dir, 'd'));
+    const real = createMcpHandler({ client: {} as ApiClient, filesDir: dir });
+    const res: any = await real({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'import_cookies', arguments: { id: 'p1', fileName: 'd' } } });
+    expect(res.result).toMatchObject({ isError: true, content: [{ text: `Không đọc được file: ${join(dir, 'd')}` }] });
   });
 });

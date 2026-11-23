@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { chmodSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 export const DEFAULT_PORT = 47800;
 const APP_DIR_NAME = 'Browser Fingerprint';
@@ -17,6 +17,18 @@ export function defaultDataDir(platform: NodeJS.Platform = process.platform, env
 
 export function tokenPath(dataDir: string): string {
   return join(dataDir, TOKEN_FILE);
+}
+
+/**
+ * Thư mục duy nhất mà các công cụ file của MCP được đọc và ghi: BF_MCP_FILE_DIR (đường dẫn tuyệt đối),
+ * không thì thư mục `mcp-files` cạnh file token.
+ */
+export function mcpFilesDir(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.BF_MCP_FILE_DIR) {
+    if (!isAbsolute(env.BF_MCP_FILE_DIR)) throw new Error('BF_MCP_FILE_DIR phải là đường dẫn tuyệt đối');
+    return resolve(env.BF_MCP_FILE_DIR);
+  }
+  return join(dirname(env.BF_API_TOKEN_FILE || tokenPath(defaultDataDir())), 'mcp-files');
 }
 
 function readValid(file: string): string | null {

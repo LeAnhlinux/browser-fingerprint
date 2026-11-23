@@ -13,17 +13,19 @@ const MCP_MAIN = join(__dirname, '..', '..', 'dist', 'mcp-main.js');
 let server: ApiServer;
 let client: Client;
 let tmp: string;
+let filesDir: string;
 
 beforeAll(async () => {
   if (!existsSync(MCP_MAIN)) throw new Error('Chưa build: chạy pnpm --filter @bf/api build trước');
   tmp = mkdtempSync(join(tmpdir(), 'bf-mcp-interop-'));
   const tokenFile = join(tmp, 'api-token');
+  filesDir = join(tmp, 'files');
   writeFileSync(tokenFile, TOKEN);
   server = await startApiServer({ core: fakeCore(), token: TOKEN, port: 0 });
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [MCP_MAIN],
-    env: { ...(process.env as Record<string, string>), BF_API_PORT: String(server.port), BF_API_TOKEN_FILE: tokenFile },
+    env: { ...(process.env as Record<string, string>), BF_API_PORT: String(server.port), BF_API_TOKEN_FILE: tokenFile, BF_MCP_FILE_DIR: filesDir },
   });
   client = new Client({ name: 'bf-interop-test', version: '1.0.0' });
   await client.connect(transport);
@@ -60,10 +62,13 @@ describe('máy khách MCP chính thức nói chuyện được với mcp-main', 
 
   it('export_cookies ghi file và không đưa giá trị cookie qua giao thức', async () => {
     const created = JSON.parse(textOf(await client.callTool({ name: 'create_profile', arguments: { name: 'mcp-2' } })));
-    const file = join(tmp, 'out.json');
-    const result = await client.callTool({ name: 'export_cookies', arguments: { id: created.id, filePath: file } });
+    const file = join(filesDir, 'out.json');
+    const result = await client.callTool({ name: 'export_cookies', arguments: { id: created.id, fileName: 'out.json' } });
     expect(JSON.parse(textOf(result))).toEqual({ count: 1, filePath: file });
     expect(JSON.stringify(result)).not.toContain(COOKIE_SECRET);
     expect(existsSync(file)).toBe(true);
+    const escape = await client.callTool({ name: 'export_cookies', arguments: { id: created.id, fileName: '../fuga.json' } });
+    expect((escape as { isError?: boolean }).isError).toBe(true);
+    expect(existsSync(join(tmp, 'fuga.json'))).toBe(false);
   });
 });

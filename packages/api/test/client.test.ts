@@ -1,3 +1,4 @@
+import { type Server, createServer } from 'node:http';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -78,6 +79,44 @@ describe('ApiClient', () => {
     expect(err.status).toBe(0);
     expect(err.message).toBe('Không kết nối được tới app. Hãy mở Browser Fingerprint trước (API chỉ chạy khi app đang mở).');
     server = await startApiServer({ core, token: TOKEN, port: 0 });
+  });
+
+  describe('máy chủ không phải app', () => {
+    let fake: Server;
+    let hits: string[];
+    const listen = async (handler: Parameters<typeof createServer>[1]): Promise<number> => {
+      fake = createServer(handler);
+      await new Promise<void>((r) => fake.listen(0, '127.0.0.1', r));
+      return (fake.address() as { port: number }).port;
+    };
+    beforeEach(() => {
+      hits = [];
+    });
+    afterEach(async () => {
+      fake.closeAllConnections();
+      await new Promise<void>((r) => fake.close(() => r()));
+    });
+
+    it('chuyển hướng thành ApiError mã 0 và không bao giờ gọi tới đích chuyển hướng', async () => {
+      const port = await listen((req, res) => {
+        hits.push(req.url ?? '');
+        if (req.url === '/v1/info') {
+          res.writeHead(302, { Location: `http://127.0.0.1:${(fake.address() as { port: number }).port}/duoc-chuyen-huong` });
+          res.end();
+        } else {
+          res.end('{}');
+        }
+      });
+      const err = await failure(new ApiClient({ token: TOKEN, port }).info());
+      expect(err).toMatchObject({ status: 0, message: 'Máy chủ API trả lời không hợp lệ' });
+      expect(hits).toEqual(['/v1/info']);
+    });
+
+    it('máy chủ không bao giờ trả lời: hết thời gian chờ thành ApiError mã 0', async () => {
+      const port = await listen(() => {});
+      const err = await failure(new ApiClient({ token: TOKEN, port, timeoutMs: 100 }).info());
+      expect(err).toMatchObject({ status: 0, message: 'App không trả lời kịp thời gian' });
+    });
   });
 
   it('token dạng hàm được gọi lại ở mỗi request; hàm ném lỗi thành ApiError mã 0', async () => {

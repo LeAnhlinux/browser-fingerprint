@@ -1,22 +1,21 @@
 import { constants } from 'node:fs';
-import { open, stat } from 'node:fs/promises';
-import { isAbsolute } from 'node:path';
+import { chmod, lstat, mkdir, open, rm, stat } from 'node:fs/promises';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import type { ProfileInput, ProfileUpdate } from '@bf/core';
 import { ApiError, type ApiClient } from './client';
 
 export interface McpDeps {
   client: ApiClient;
-  readFile(path: string): Promise<string>;
-  /** Phải thất bại với lỗi có code 'EEXIST' nếu file đã có: công cụ không bao giờ ghi đè file. */
-  writeNewFile(path: string, data: string): Promise<void>;
+  /** Thư mục duy nhất (đường dẫn tuyệt đối) mà import_cookies và export_cookies được đọc và ghi. */
+  filesDir: string;
 }
 
 const PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 const SERVER_INFO = { name: 'browser-fingerprint', version: '0.1.0' };
 const INSTRUCTIONS =
   'Điều khiển app Browser Fingerprint đang mở trên máy này: quản lý hồ sơ trình duyệt tách biệt, khởi động để lấy địa chỉ CDP, nhập và xuất cookie qua file. ' +
-  'App phải đang mở. Cookie không bao giờ được trả về trong kết quả công cụ.';
+  'App phải đang mở. Kết quả của công cụ không bao giờ chứa giá trị cookie; cookie chỉ đi qua file trong một thư mục cố định.';
 
 /** Giới hạn của lõi app cho văn bản cookie; đọc quá mức này là vô ích. */
 export const MAX_COOKIE_FILE_BYTES = 5_000_000;
@@ -71,10 +70,32 @@ function str(args: Args, key: string): string {
   return value;
 }
 
-function absolutePath(args: Args): string {
-  const path = str(args, 'filePath');
-  if (!isAbsolute(path)) throw new ToolError('filePath phải là đường dẫn tuyệt đối');
-  return path;
+const FILE_NAME_RE = /^[A-Za-z0-9._-]{1,100}$/;
+// Tên thiết bị của Windows: mở "NUL.json" hay "con" không tạo file mà ghi vào thiết bị.
+const WINDOWS_DEVICE_RE = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i;
+const BAD_FILE_NAME =
+  'fileName không hợp lệ: chỉ là tên file (1-100 ký tự gồm chữ, số, dấu chấm, gạch ngang, gạch dưới), không bắt đầu hoặc kết thúc bằng dấu chấm, không phải đường dẫn';
+
+/** Tên file do mô hình đưa (không tin cậy): chỉ một thành phần đơn giản, không bao giờ thoát được khỏi thư mục. */
+function fileNameArg(args: Args): string {
+  const name = str(args, 'fileName');
+  if (!FILE_NAME_RE.test(name) || name.startsWith('.') || name.endsWith('.') || WINDOWS_DEVICE_RE.test(name)) throw new ToolError(BAD_FILE_NAME);
+  return name;
+}
+
+/** Tạo thư mục file của MCP (0700) nếu chưa có, và siết quyền nếu đã có. */
+async function ensureFilesDir(dir: string): Promise<void> {
+  try {
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    try {
+      await chmod(dir, 0o700);
+    } catch (e) {
+      // Windows: bảo vệ dựa vào ACL, chmod không đổi ACL (như token.ts).
+      if (process.platform !== 'win32') throw e;
+    }
+  } catch {
+    throw new ToolError(`Không chuẩn bị được thư mục file của MCP: ${dir}`);
+  }
 }
 
 const ID = { type: 'string', description: 'Mã hồ sơ (trường id trong kết quả list_profiles)' };
@@ -147,7 +168,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'start_profile',
-    description: 'Khởi động trình duyệt của một hồ sơ (qua proxy của nó nếu có) và trả về cdpUrl để nối Playwright/Puppeteer. Đang chạy rồi thì trả phiên hiện có.',
+    description: 'Khởi động trình duyệt của một hồ sơ (qua proxy của nó nếu có) và trả về cdpUrl để nối Playwright/Puppeteer. Đang chạy rồi thì trả phiên hiện có. Lưu ý: cdpUrl cho toàn quyền điều khiển trình duyệt đó, kể cả đọc cookie của nó.',
     inputSchema: {
       type: 'object',
       properties: { id: ID, headless: { type: 'boolean', description: 'true để chạy không cửa sổ' } },
@@ -167,19 +188,22 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'import_cookies',
-    description: 'Nhập cookie vào một hồ sơ từ một file trên máy (JSON kiểu extension cookie hoặc Netscape cookies.txt). Trả về số cookie đã nhập, không trả nội dung cookie.',
+    description: 'Nhập cookie vào một hồ sơ từ một file (JSON kiểu extension cookie hoặc Netscape cookies.txt) nằm trong thư mục file của MCP; chỉ nhận tên file, không nhận đường dẫn. Kết quả là số cookie đã nhập, không có giá trị cookie.',
     inputSchema: {
       type: 'object',
-      properties: { id: ID, filePath: { type: 'string', description: 'Đường dẫn tuyệt đối tới file cookie' } },
-      required: ['id', 'filePath'],
+      properties: { id: ID, fileName: { type: 'string', description: 'Tên file cookie trong thư mục file của MCP (1-100 ký tự: chữ, số, ., -, _; không bắt đầu bằng dấu chấm)' } },
+      required: ['id', 'fileName'],
       additionalProperties: false,
     },
-    run: async (args, { client, readFile }) => {
+    run: async (args, { client, filesDir }) => {
       const id = str(args, 'id');
-      const path = absolutePath(args);
+      const path = join(filesDir, fileNameArg(args));
+      await ensureFilesDir(filesDir);
       let text: string;
       try {
-        text = await readFile(path);
+        // Một liên kết trong thư mục không được dẫn việc đọc ra ngoài.
+        if ((await lstat(path)).isSymbolicLink()) throw new Error('symlink');
+        text = await readCookieFile(path);
       } catch {
         throw new ToolError(`Không đọc được file: ${path}`);
       }
@@ -188,24 +212,40 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'export_cookies',
-    description: 'Xuất cookie của một hồ sơ ra một file JSON mới trên máy (chỉ chủ máy đọc được) và trả về số lượng. Nội dung cookie không được trả về; file tương đương mật khẩu.',
+    description: 'Xuất cookie của một hồ sơ ra một file JSON mới trong thư mục file của MCP (chỉ chủ máy đọc được), chỉ nhận tên file; trả về số lượng và đường dẫn đầy đủ. File đã có thì không ghi đè. Kết quả không chứa giá trị cookie, nhưng file tương đương mật khẩu.',
     inputSchema: {
       type: 'object',
-      properties: { id: ID, filePath: { type: 'string', description: 'Đường dẫn tuyệt đối của file sẽ tạo; file không được tồn tại sẵn' } },
-      required: ['id', 'filePath'],
+      properties: { id: ID, fileName: { type: 'string', description: 'Tên file sẽ tạo trong thư mục file của MCP (1-100 ký tự: chữ, số, ., -, _; không bắt đầu bằng dấu chấm); file không được tồn tại sẵn' } },
+      required: ['id', 'fileName'],
       additionalProperties: false,
     },
-    run: async (args, { client, writeNewFile }) => {
+    run: async (args, { client, filesDir }) => {
       const id = str(args, 'id');
-      const path = absolutePath(args);
-      const { count, cookies } = await client.exportCookies(id);
+      const path = join(filesDir, fileNameArg(args));
+      await ensureFilesDir(filesDir);
+      // Giữ chỗ đích TRƯỚC khi xuất (có thể mở một trình duyệt ẩn): 'wx' thất bại nếu đã có gì ở đó,
+      // kể cả liên kết; 0600 vì file cookie chỉ chủ máy được đọc.
+      let handle;
       try {
-        await writeNewFile(path, JSON.stringify(cookies, null, 2));
+        handle = await open(path, 'wx', 0o600);
       } catch (err) {
-        if (isRecord(err) && err.code === 'EEXIST') throw new ToolError(`File đã tồn tại, hãy chọn đường dẫn khác: ${path}`);
+        if (isRecord(err) && err.code === 'EEXIST') throw new ToolError(`File đã tồn tại, hãy chọn tên khác: ${path}`);
         throw new ToolError(`Không ghi được file: ${path}`);
       }
-      return { count, filePath: path };
+      try {
+        const { count, cookies } = await client.exportCookies(id);
+        try {
+          await handle.writeFile(JSON.stringify(cookies, null, 2));
+        } catch {
+          throw new ToolError(`Không ghi được file: ${path}`);
+        }
+        return { count, filePath: path };
+      } catch (err) {
+        await rm(path, { force: true }).catch(() => undefined);
+        throw err;
+      } finally {
+        await handle.close().catch(() => undefined);
+      }
     },
   },
   {

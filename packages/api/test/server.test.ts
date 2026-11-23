@@ -143,6 +143,30 @@ describe('máy chủ API: đường dẫn', () => {
     expect(boom.text).not.toContain('bí mật');
   });
 
+  it('500 gọi onError với tên lỗi và route, không kèm thông báo, URL thật hay token; 4xx thì không gọi', async () => {
+    const seen: unknown[] = [];
+    const traced = await startApiServer({ core, token: TOKEN, port: 0, onError: (info) => seen.push(info) });
+    try {
+      expect((await http(traced.port, 'POST', '/v1/profiles', { body: { name: 'boom' } })).status).toBe(500);
+      expect(await http(traced.port, 'POST', '/v1/profiles', { body: { name: '' } })).toMatchObject({ status: 400 });
+      expect(await http(traced.port, 'GET', '/v1/profiles/ma-nhay-cam')).toMatchObject({ status: 404 });
+      expect(seen).toEqual([{ method: 'POST', route: String.raw`^\/v1\/profiles$`, name: 'TypeError' }]);
+      const logged = JSON.stringify(seen);
+      for (const secret of ['bí mật', 'chi tiết', TOKEN, 'boom', 'ma-nhay-cam']) expect(logged).not.toContain(secret);
+    } finally {
+      await traced.close();
+    }
+  });
+
+  it('onError ném lỗi cũng không làm hỏng phản hồi 500', async () => {
+    const bad = await startApiServer({ core, token: TOKEN, port: 0, onError: () => { throw new Error('log hỏng'); } });
+    try {
+      expect(await http(bad.port, 'POST', '/v1/profiles', { body: { name: 'boom' } })).toMatchObject({ status: 500, json: { error: 'Lỗi nội bộ' } });
+    } finally {
+      await bad.close();
+    }
+  });
+
   it('start trả RunInfo có cdpUrl, nhận headless, và gọi lại thì trả phiên đang chạy', async () => {
     await http(port, 'POST', '/v1/profiles', { body: { name: 'a' } });
     const first = await http(port, 'POST', '/v1/profiles/p1/start', { body: { headless: true } });

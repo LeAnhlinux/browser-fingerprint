@@ -26,6 +26,11 @@ export interface ApiServerOptions {
   token: string;
   /** Mặc định DEFAULT_PORT; 0 để hệ điều hành chọn cổng trống. */
   port?: number;
+  /**
+   * Gọi khi một request kết thúc bằng 500 do toHttp. Chỉ mang tên lỗi, mã lỗi hệ thống và tuyến khớp
+   * (mẫu của route, không phải URL thật): không bao giờ có thông báo lỗi hay mã hồ sơ.
+   */
+  onError?: (info: { method: string; route: string; name: string; code?: string }) => void;
 }
 
 export interface ApiServer {
@@ -198,6 +203,7 @@ export function startApiServer(opts: ApiServerOptions): Promise<ApiServer> {
   let port = 0;
 
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    let route = 'chưa khớp route';
     try {
       // Thứ tự là một phần của thiết kế: Host (chặn DNS rebinding), Origin (chặn trang web), rồi mới tới token.
       const host = String(req.headers.host ?? '').toLowerCase();
@@ -216,6 +222,7 @@ export function startApiServer(opts: ApiServerOptions): Promise<ApiServer> {
       if (candidates.length === 0) throw new HttpError(404, 'Không tìm thấy đường dẫn');
       const hit = candidates.find((c) => c.r.method === req.method);
       if (!hit) throw new HttpError(405, 'Phương thức không được hỗ trợ');
+      route = hit.r.path.source;
       let id = '';
       try {
         id = decodeURIComponent(hit.match?.[1] ?? '');
@@ -227,6 +234,19 @@ export function startApiServer(opts: ApiServerOptions): Promise<ApiServer> {
       send(res, hit.r.status, result);
     } catch (err) {
       const { status, message } = toHttp(err);
+      if (status === 500 && opts.onError) {
+        const code = (err as { code?: unknown } | null)?.code;
+        try {
+          opts.onError({
+            method: String(req.method),
+            route,
+            name: err instanceof Error ? err.name : typeof err,
+            ...(typeof code === 'string' ? { code } : {}),
+          });
+        } catch {
+          // Trình ghi log hỏng không được làm hỏng phản hồi.
+        }
+      }
       send(res, status, { error: message });
     }
   };
