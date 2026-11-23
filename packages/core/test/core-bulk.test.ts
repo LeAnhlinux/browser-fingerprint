@@ -1,7 +1,7 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Core } from '../src/core';
 import type { ProxyCheckResult } from '../src/proxy-checker';
 import type { Upstream } from '../src/proxy-bridge';
@@ -25,6 +25,8 @@ beforeEach(async () => {
   });
   await core.init();
 });
+
+afterEach(() => vi.restoreAllMocks());
 
 describe('importProxies', () => {
   it('thêm proxy hợp lệ, bỏ qua trùng, báo lỗi theo dòng, mã hoá mật khẩu', () => {
@@ -178,5 +180,170 @@ describe('sửa hàng loạt', () => {
     const by = new Map(core.listProfiles().map((p) => [p.id, p]));
     expect(by.get(p1.id)).toMatchObject({ timezone: 'Asia/Tokyo', lang: 'ja-JP', acceptLang: 'ja-JP,ja,en-US,en' });
     expect(by.get(p2.id)).toMatchObject({ timezone: 'Europe/Paris', lang: 'en-US' });
+  });
+});
+
+function throwOnCall<T extends object, K extends keyof T>(obj: T, key: K, nth: number): void {
+  const real = (obj[key] as unknown as (...a: unknown[]) => unknown).bind(obj);
+  let calls = 0;
+  vi.spyOn(obj, key as never).mockImplementation(((...a: unknown[]) => {
+    if (++calls === nth) throw new Error('lỗi ghi giả lập');
+    return real(...a);
+  }) as never);
+}
+
+describe('rollback giữa chừng', () => {
+  it('createProfilesBulk: ghi lỗi ở hồ sơ thứ 3 thì không tạo gì', () => {
+    throwOnCall(core.store, 'createProfile', 3);
+    expect(() => core.createProfilesBulk({ count: 5, namePattern: 'P{n}' })).toThrow('lỗi ghi giả lập');
+    vi.restoreAllMocks();
+    expect(core.listProfiles()).toEqual([]);
+  });
+
+  it('assignUnusedProxies: ghi lỗi ở lần thứ 2 thì không gán gì', () => {
+    for (const h of ['a', 'b', 'c']) core.createProxy({ protocol: 'http', host: h, port: 1 });
+    const made = core.createProfilesBulk({ count: 3, namePattern: 'P{n}' });
+    throwOnCall(core.store, 'updateProfile', 2);
+    expect(() => core.assignUnusedProxies(made.map((p) => p.id))).toThrow('lỗi ghi giả lập');
+    vi.restoreAllMocks();
+    expect(core.listProfiles().every((p) => p.proxyId === null)).toBe(true);
+  });
+
+  it('updateProfilesBulk: ghi lỗi ở lần thứ 2 thì không đổi gì', () => {
+    const g = core.createGroup('G');
+    const made = core.createProfilesBulk({ count: 3, namePattern: 'P{n}' });
+    throwOnCall(core.store, 'updateProfile', 2);
+    expect(() => core.updateProfilesBulk(made.map((p) => p.id), { groupId: g.id })).toThrow('lỗi ghi giả lập');
+    vi.restoreAllMocks();
+    expect(core.listProfiles().every((p) => p.groupId === null)).toBe(true);
+  });
+
+  it('applyProxyLocale: ghi lỗi ở lần thứ 2 thì không đổi gì', async () => {
+    const xs = [core.createProxy({ protocol: 'http', host: 'a', port: 1 }), core.createProxy({ protocol: 'http', host: 'b', port: 1 })];
+    await core.checkProxies(xs.map((x) => x.id));
+    const ps = xs.map((x, i) => core.createProfile({ name: `p${i}`, proxyId: x.id, timezone: 'UTC' }));
+    throwOnCall(core.store, 'updateProfile', 2);
+    expect(() => core.applyProxyLocale(ps.map((p) => p.id))).toThrow('lỗi ghi giả lập');
+    vi.restoreAllMocks();
+    expect(core.listProfiles().every((p) => p.timezone === 'UTC')).toBe(true);
+  });
+
+  it('importProxies: lỗi lưu trữ ở lần ghi thứ 2 thì hủy cả lần nhập', () => {
+    throwOnCall(core.store, 'createProxy', 2);
+    expect(() => core.importProxies('1.1.1.1:80\n2.2.2.2:80\n3.3.3.3:80')).toThrow('lỗi ghi giả lập');
+    vi.restoreAllMocks();
+    expect(core.store.listProxies()).toEqual([]);
+  });
+});
+
+describe('proxy đổi trong lúc kiểm tra', () => {
+  it('không lưu kết quả cũ cho điểm cuối mới', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const slow = new Core({
+      dataDir: mkdtempSync(join(tmpdir(), 'bf-bulk-')),
+      secrets: { encrypt: (s) => s, decrypt: (s) => s },
+      proxyCheck: async () => {
+        await gate;
+        return okResult('9.9.9.9', 'FR', 'Europe/Paris');
+      },
+    });
+    const y = slow.createProxy({ protocol: 'http', host: 'a', port: 1 });
+    const pending = slow.checkProxy(y.id);
+    slow.updateProxy(y.id, { port: 2 });
+    release();
+    await expect(pending).rejects.toThrow('Proxy đã thay đổi trong lúc kiểm tra, hãy kiểm tra lại');
+    expect(slow.listProxies()[0].lastStatus).toBeNull();
+    await slow.shutdown();
+  });
+});
+
+describe('checkProxies', () => {
+  it('không chạy quá 5 kiểm tra cùng lúc và bỏ id trùng', async () => {
+    let running = 0;
+    let peak = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const c = new Core({
+      dataDir: mkdtempSync(join(tmpdir(), 'bf-bulk-')),
+      secrets: { encrypt: (s) => s, decrypt: (s) => s },
+      proxyCheck: async () => {
+        peak = Math.max(peak, ++running);
+        await gate;
+        running--;
+        return okResult('1.1.1.1', 'US', 'America/Chicago');
+      },
+    });
+    const ids = Array.from({ length: 12 }, (_, i) => c.createProxy({ protocol: 'http', host: `h${i}`, port: 1 }).id);
+    const done = c.checkProxies([...ids, ...ids]);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(running).toBe(5);
+    release();
+    await done;
+    expect(peak).toBe(5);
+    expect(c.listProxies().every((x) => x.lastStatus === 'ok')).toBe(true);
+    await c.shutdown();
+  });
+
+  it('từ chối quá 1000 id', async () => {
+    await expect(core.checkProxies(Array.from({ length: 1001 }, (_, i) => `x${i}`))).rejects.toThrow('Kiểm tra tối đa 1000 proxy một lần');
+  });
+});
+
+describe('id trùng', () => {
+  it('assignUnusedProxies và updateProfilesBulk coi id trùng là một hồ sơ', () => {
+    const a = core.createProxy({ protocol: 'http', host: 'a', port: 1 });
+    const g = core.createGroup('G');
+    const [p1] = core.createProfilesBulk({ count: 1, namePattern: 'P{n}' });
+    expect(core.assignUnusedProxies([p1.id, p1.id])).toBe(1);
+    expect(core.listProfiles()[0].proxyId).toBe(a.id);
+    expect(core.updateProfilesBulk([p1.id, p1.id], { groupId: g.id })).toBe(1);
+  });
+
+  it('applyProxyLocale đếm theo hồ sơ riêng biệt', async () => {
+    const x = core.createProxy({ protocol: 'http', host: 'a', port: 1 });
+    await core.checkProxy(x.id);
+    const p = core.createProfile({ name: 'p', proxyId: x.id });
+    const none = core.createProfile({ name: 'q' });
+    const r = core.applyProxyLocale([p.id, p.id, none.id, none.id]);
+    expect(r.updated).toBe(1);
+    expect(r.skipped).toHaveLength(1);
+  });
+});
+
+describe('kiểm tra đầu vào bổ sung', () => {
+  it('proxyId/groupId sai kiểu bị từ chối, không bị ép thành null', () => {
+    const x = core.createProxy({ protocol: 'http', host: 'a', port: 1 });
+    const p = core.createProfile({ name: 'p', proxyId: x.id });
+    for (const bad of [0, false, Number.NaN, {}]) {
+      expect(() => core.updateProfilesBulk([p.id], { proxyId: bad as never })).toThrow('Tham số không hợp lệ');
+      expect(() => core.updateProfilesBulk([p.id], { groupId: bad as never })).toThrow('Tham số không hợp lệ');
+      expect(() => core.createProfilesBulk({ count: 1, namePattern: 'x', groupId: bad as never })).toThrow('Tham số không hợp lệ');
+      expect(() => core.updateProfile(p.id, { proxyId: bad as never })).toThrow('Tham số không hợp lệ');
+      expect(() => core.createProfile({ name: 'y', groupId: bad as never })).toThrow('Tham số không hợp lệ');
+    }
+    expect(core.listProfiles()[0].proxyId).toBe(x.id);
+  });
+
+  it('tên: giới hạn độ dài, ký tự điều khiển; startIndex tối đa', () => {
+    expect(() => core.createProfilesBulk({ count: 1, namePattern: 'a'.repeat(201) })).toThrow('Tên hồ sơ tối đa 200 ký tự');
+    expect(() => core.createProfilesBulk({ count: 1, namePattern: 'a\nb' })).toThrow('Tên hồ sơ chứa ký tự không hợp lệ');
+    expect(() => core.createProfile({ name: 'a\u0000' })).toThrow('Tên hồ sơ chứa ký tự không hợp lệ');
+    expect(() => core.createProfilesBulk({ count: 1, namePattern: 'x', startIndex: 1_000_000_001 })).toThrow('Số bắt đầu không hợp lệ');
+    expect(() => core.createProfilesBulk({ count: 1, namePattern: 'a'.repeat(200) })).toThrow('Tên hồ sơ tối đa 200 ký tự');
+    expect(core.listProfiles()).toEqual([]);
+  });
+
+  it('input/patch không phải đối tượng', () => {
+    const [p] = core.createProfilesBulk({ count: 1, namePattern: 'P{n}' });
+    for (const bad of [null, [], 'x']) {
+      expect(() => core.createProfilesBulk(bad as never)).toThrow('Tham số không hợp lệ');
+      expect(() => core.updateProfilesBulk([p.id], bad as never)).toThrow('Tham số không hợp lệ');
+    }
+  });
+
+  it('importProxies: giới hạn kích thước', () => {
+    expect(() => core.importProxies('a'.repeat(1_000_001))).toThrow('Danh sách proxy quá dài (tối đa 5000 dòng)');
+    expect(() => core.importProxies(Array.from({ length: 5001 }, (_, i) => `h${i}:1`).join('\n'))).toThrow('Danh sách proxy quá dài (tối đa 5000 dòng)');
   });
 });

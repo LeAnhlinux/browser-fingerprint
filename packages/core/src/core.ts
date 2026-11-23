@@ -8,7 +8,7 @@ import { localeForCountry } from './locale';
 import type { Upstream } from './proxy-bridge';
 import { type ProxyCheckResult, checkProxy as runProxyCheck } from './proxy-checker';
 import { parseProxyList } from './proxy-parse';
-import { type NewProfile, type ProfileFilter, type ProfilePatch, ProfileStore, type ProxyRowPatch } from './store';
+import { type NewProfile, type NewProxyRow, type ProfileFilter, type ProfilePatch, ProfileStore, type ProxyRowPatch } from './store';
 import type { Group, Platform, Profile, Proxy, ProxyProtocol, SecretBox } from './types';
 
 export type ProfileView = Profile & { run: RunInfo | null };
@@ -67,15 +67,35 @@ function toProxyView(x: Proxy): ProxyView {
   return { ...rest, hasPassword: passwordEncrypted !== null };
 }
 
+const BAD_ARGS = 'Tham số không hợp lệ';
+const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+
+// undefined, null hoặc chuỗi; chuỗi rỗng coi như null. Kiểu khác bị từ chối, không bao giờ ép thành null.
+function refValue(v: unknown): string | null | undefined {
+  if (v === undefined) return undefined;
+  if (v === null) return null;
+  if (typeof v === 'string') return v || null;
+  throw new Error(BAD_ARGS);
+}
+
 function normalizeRefs<T extends { proxyId?: string | null; groupId?: string | null }>(input: T): T {
   const next = { ...input };
-  if (next.proxyId !== undefined) next.proxyId = next.proxyId || null;
-  if (next.groupId !== undefined) next.groupId = next.groupId || null;
+  if (next.proxyId !== undefined) next.proxyId = refValue(next.proxyId);
+  if (next.groupId !== undefined) next.groupId = refValue(next.groupId);
   return next;
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
 const MAX_BULK = 500;
 const CHECK_CONCURRENCY = 5;
+const MAX_START_INDEX = 1_000_000_000;
+const MAX_NAME = 200;
+const MAX_IMPORT_CHARS = 1_000_000;
+const MAX_IMPORT_LINES = 5000;
+const MAX_CHECK_IDS = 1000;
 
 function proxyKey(p: { protocol: string; host: string; port: number; username: string | null }): string {
   return `${p.protocol}|${p.host.toLowerCase()}|${p.port}|${p.username ?? ''}`;
@@ -149,6 +169,8 @@ export class Core extends EventEmitter {
   private cleanName(name: unknown): string {
     const n = typeof name === 'string' ? name.trim() : '';
     if (!n) throw new Error('Tên hồ sơ không được để trống');
+    if (n.length > MAX_NAME) throw new Error(`Tên hồ sơ tối đa ${MAX_NAME} ký tự`);
+    if (CONTROL_CHARS.test(n)) throw new Error('Tên hồ sơ chứa ký tự không hợp lệ');
     return n;
   }
 
@@ -196,21 +218,17 @@ export class Core extends EventEmitter {
     return this.store.listProxies().map(toProxyView);
   }
 
-  createProxy(input: NewProxy): ProxyView {
+  private prepareProxy(input: NewProxy): NewProxyRow {
     const protocol = checkProtocol(input.protocol);
     const host = normalizeHost(input.host);
     const port = checkPort(input.port);
     const username = input.username || null;
     if (input.password && !username) throw new Error('Cần tài khoản khi có mật khẩu');
-    return toProxyView(
-      this.store.createProxy({
-        protocol,
-        host,
-        port,
-        username,
-        passwordEncrypted: input.password ? this.secrets.encrypt(input.password) : null,
-      }),
-    );
+    return { protocol, host, port, username, passwordEncrypted: input.password ? this.secrets.encrypt(input.password) : null };
+  }
+
+  createProxy(input: NewProxy): ProxyView {
+    return toProxyView(this.store.createProxy(this.prepareProxy(input)));
   }
 
   updateProxy(id: string, patch: ProxyPatch): ProxyView {
@@ -248,25 +266,29 @@ export class Core extends EventEmitter {
 
   importProxies(text: string, defaultProtocol: ProxyProtocol = 'http'): ProxyImportResult {
     if (typeof text !== 'string') throw new Error('Danh sách proxy không hợp lệ');
+    const tooLong = 'Danh sách proxy quá dài (tối đa 5000 dòng)';
+    if (text.length > MAX_IMPORT_CHARS) throw new Error(tooLong);
     const parsed = parseProxyList(text, checkProtocol(defaultProtocol));
+    if (parsed.proxies.length + parsed.errors.length > MAX_IMPORT_LINES) throw new Error(tooLong);
     const errors = [...parsed.errors];
     const seen = new Set(this.store.listProxies().map(proxyKey));
-    const created: ProxyView[] = [];
+    const rows: NewProxyRow[] = [];
     let skipped = 0;
-    this.store.transaction(() => {
-      for (const item of parsed.proxies) {
-        if (seen.has(proxyKey(item))) {
-          skipped++;
-          continue;
-        }
-        try {
-          created.push(this.createProxy(item));
-          seen.add(proxyKey(item));
-        } catch (err) {
-          errors.push({ line: item.line, reason: (err as Error).message });
-        }
+    // Kiểm tra từng dòng trước khi ghi: chỉ lỗi kiểm tra mới thành lỗi theo dòng.
+    for (const item of parsed.proxies) {
+      if (seen.has(proxyKey(item))) {
+        skipped++;
+        continue;
       }
-    });
+      try {
+        rows.push(this.prepareProxy(item));
+        seen.add(proxyKey(item));
+      } catch (err) {
+        errors.push({ line: item.line, reason: (err as Error).message });
+      }
+    }
+    // Ghi một transaction: lỗi lưu trữ thật sự làm hỏng cả lần nhập, không đổi gì.
+    const created = this.store.transaction(() => rows.map((row) => toProxyView(this.store.createProxy(row))));
     errors.sort((a, b) => a.line - b.line);
     if (created.length > 0) this.emit('change', '');
     return { created, skipped, errors };
@@ -275,14 +297,25 @@ export class Core extends EventEmitter {
   async checkProxy(id: string): Promise<ProxyView> {
     const proxy = this.store.getProxy(id);
     if (!proxy) throw new Error('Không tìm thấy proxy');
+    const { protocol, host, port, username, passwordEncrypted } = proxy;
     const result = await this.proxyCheck({
-      protocol: proxy.protocol,
-      host: proxy.host,
-      port: proxy.port,
-      username: proxy.username,
-      password: proxy.passwordEncrypted ? this.secrets.decrypt(proxy.passwordEncrypted) : null,
+      protocol,
+      host,
+      port,
+      username,
+      password: passwordEncrypted ? this.secrets.decrypt(passwordEncrypted) : null,
     });
-    if (!this.store.getProxy(id)) throw new Error('Không tìm thấy proxy');
+    const now = this.store.getProxy(id);
+    if (!now) throw new Error('Không tìm thấy proxy');
+    if (
+      now.protocol !== protocol ||
+      now.host !== host ||
+      now.port !== port ||
+      now.username !== username ||
+      now.passwordEncrypted !== passwordEncrypted
+    ) {
+      throw new Error('Proxy đã thay đổi trong lúc kiểm tra, hãy kiểm tra lại');
+    }
     this.store.saveProxyCheck(id, result);
     this.emit('change', id);
     return toProxyView(this.store.getProxy(id)!);
@@ -290,7 +323,8 @@ export class Core extends EventEmitter {
 
   async checkProxies(ids: string[]): Promise<void> {
     if (!Array.isArray(ids)) throw new Error('Danh sách proxy không hợp lệ');
-    const queue = ids.filter((id) => typeof id === 'string');
+    if (ids.length > MAX_CHECK_IDS) throw new Error(`Kiểm tra tối đa ${MAX_CHECK_IDS} proxy một lần`);
+    const queue = [...new Set(ids.filter((id) => typeof id === 'string'))];
     const worker = async (): Promise<void> => {
       for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
         await this.checkProxy(id).catch(() => {});
@@ -307,7 +341,7 @@ export class Core extends EventEmitter {
   private profilesByIds(ids: unknown): Profile[] {
     if (!Array.isArray(ids) || ids.length === 0) throw new Error('Chưa chọn hồ sơ nào');
     if (ids.length > 1000) throw new Error('Chọn tối đa 1000 hồ sơ một lần');
-    return ids.map((id) => {
+    return [...new Set(ids)].map((id) => {
       const profile = typeof id === 'string' ? this.store.getProfile(id) : null;
       if (!profile) throw new Error('Không tìm thấy hồ sơ');
       return profile;
@@ -315,22 +349,25 @@ export class Core extends EventEmitter {
   }
 
   createProfilesBulk(input: BulkCreateInput): Profile[] {
+    if (!isRecord(input)) throw new Error(BAD_ARGS);
     const count = input.count;
     if (!Number.isInteger(count) || count < 1 || count > MAX_BULK) throw new Error(`Số lượng phải từ 1 đến ${MAX_BULK}`);
     const start = input.startIndex ?? 1;
-    if (!Number.isInteger(start) || start < 0) throw new Error('Số bắt đầu không hợp lệ');
+    if (!Number.isInteger(start) || start < 0 || start > MAX_START_INDEX) throw new Error('Số bắt đầu không hợp lệ');
     const pattern = this.cleanName(input.namePattern);
-    const groupId = input.groupId || null;
+    const groupId = refValue(input.groupId) ?? null;
     this.checkProfileRefs({ groupId });
     const mode = input.proxyMode ?? 'none';
     if (mode !== 'none' && mode !== 'unused') throw new Error('Cách gán proxy không hợp lệ');
     const pool = mode === 'unused' ? this.unusedProxies() : [];
     if (mode === 'unused' && pool.length < count) throw new Error(`Không đủ proxy chưa dùng: cần ${count}, có ${pool.length}`);
     const width = Math.max(2, String(start + count - 1).length);
+    const names = Array.from({ length: count }, (_, i) => {
+      const n = String(start + i).padStart(width, '0');
+      return this.cleanName(pattern.includes('{n}') ? pattern.replaceAll('{n}', n) : `${pattern}-${n}`);
+    });
     const made = this.store.transaction(() =>
-      Array.from({ length: count }, (_, i) => {
-        const n = String(start + i).padStart(width, '0');
-        const name = pattern.includes('{n}') ? pattern.replaceAll('{n}', n) : `${pattern}-${n}`;
+      names.map((name, i) => {
         const proxy = mode === 'unused' ? pool[i] : null;
         const locale = input.applyLocale && proxy ? localeFromProxy(proxy) : null;
         return this.store.createProfile({ name, groupId, proxyId: proxy?.id ?? null, ...(locale ?? {}) });
@@ -342,10 +379,11 @@ export class Core extends EventEmitter {
 
   updateProfilesBulk(ids: string[], patch: { groupId?: string | null; proxyId?: string | null }): number {
     const profiles = this.profilesByIds(ids);
+    if (!isRecord(patch)) throw new Error(BAD_ARGS);
     // Danh sách trường cho phép: chỉ nhóm và proxy.
     const next: { groupId?: string | null; proxyId?: string | null } = {};
-    if (patch && patch.groupId !== undefined) next.groupId = patch.groupId || null;
-    if (patch && patch.proxyId !== undefined) next.proxyId = patch.proxyId || null;
+    if (patch.groupId !== undefined) next.groupId = refValue(patch.groupId);
+    if (patch.proxyId !== undefined) next.proxyId = refValue(patch.proxyId);
     if (Object.keys(next).length === 0) throw new Error('Chưa chọn thay đổi nào');
     this.checkProfileRefs(next);
     this.store.transaction(() => {
