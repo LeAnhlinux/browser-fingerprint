@@ -87,6 +87,7 @@ describe('openCdp', () => {
     const { cdp, ws } = await connected();
     const p = cdp.call<{ ok: boolean }>('A.one');
     ws.dispatchEvent(new MessageEvent('message', { data: 'không phải json' }));
+    ws.dispatchEvent(new MessageEvent('message', { data: 'null' }));
     ws.reply({ method: 'Target.targetCreated', params: {} });
     ws.reply({ id: 1, result: { ok: true } });
     expect(await p).toEqual({ ok: true });

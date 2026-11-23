@@ -94,7 +94,7 @@ describe('parseCookies: JSON', () => {
   });
 
   it('bỏ BOM ở đầu nội dung', () => {
-    const r = parseCookies(`﻿[{"domain":".a.com","name":"a","value":"1"}]`, NOW);
+    const r = parseCookies(`\uFEFF[{"domain":".a.com","name":"a","value":"1"}]`, NOW);
     expect(r.cookies).toHaveLength(1);
   });
 });

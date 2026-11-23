@@ -53,6 +53,16 @@ beforeEach(async () => {
 });
 
 describe('Core: extension', () => {
+  it('listener change ném lỗi: dòng DB và thư mục extension vẫn còn nhất quán', async () => {
+    core.on('change', () => {
+      throw new Error('listener lỗi');
+    });
+    await core.addExtension(extFolder('Ví A')).catch(() => {});
+    const rows = core.listExtensions();
+    expect(rows).toHaveLength(1);
+    expect(existsSync(join(dataDir, 'extensions', rows[0].id, 'manifest.json'))).toBe(true);
+  });
+
   it('thêm extension: sao chép vào thư mục dữ liệu, ghi DB và phát change', async () => {
     const changes: string[] = [];
     core.on('change', (id: string) => changes.push(id));

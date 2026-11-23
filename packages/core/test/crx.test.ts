@@ -39,6 +39,15 @@ describe('parseCrx', () => {
     expect(r.publicKey?.equals(key)).toBe(true);
   });
 
+  it('CRX2 có độ dài khoá bằng 0: không có khoá (null, không phải buffer rỗng)', () => {
+    const head = Buffer.alloc(16);
+    head.write('Cr24', 0, 'latin1');
+    head.writeUInt32LE(2, 4);
+    const r = parseCrx(Buffer.concat([head, zip]));
+    expect(r.zip.equals(zip)).toBe(true);
+    expect(r.publicKey).toBeNull();
+  });
+
   it('từ chối file lạ, file cụt và phiên bản CRX không biết', () => {
     expect(() => parseCrx(Buffer.from('xin chào, đây không phải file nén'))).toThrow(BAD);
     expect(() => parseCrx(Buffer.alloc(0))).toThrow(BAD);

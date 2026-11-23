@@ -110,7 +110,7 @@ async function localizedName(dest: string, manifest: Record<string, unknown>): P
   const locale = manifest.default_locale;
   if (!m || typeof locale !== 'string' || !/^[A-Za-z0-9_]+$/.test(locale)) return raw;
   try {
-    const messages: unknown = JSON.parse((await readFile(join(dest, '_locales', locale, 'messages.json'), 'utf8')).replace(/^﻿/, ''));
+    const messages: unknown = JSON.parse((await readFile(join(dest, '_locales', locale, 'messages.json'), 'utf8')).replace(/^\uFEFF/, ''));
     if (!isRecord(messages)) return raw;
     const key = Object.keys(messages).find((k) => k.toLowerCase() === m[1].toLowerCase());
     const entry = key ? messages[key] : null;
@@ -126,7 +126,7 @@ async function readMeta(dest: string, publicKey: Buffer | null): Promise<Extensi
   if (raw === null) throw new Error('Không tìm thấy manifest.json trong extension');
   let manifest: unknown;
   try {
-    manifest = JSON.parse(raw.replace(/^﻿/, ''));
+    manifest = JSON.parse(raw.replace(/^\uFEFF/, ''));
   } catch {
     throw new Error('manifest.json không hợp lệ');
   }

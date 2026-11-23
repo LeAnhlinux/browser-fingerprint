@@ -217,7 +217,7 @@ function parseNetscape(text: string, nowSec: number): CookieParseResult {
 }
 
 export function parseCookies(text: string, nowSec: number = Date.now() / 1000): CookieParseResult {
-  const body = text.replace(/^﻿/, '');
+  const body = text.replace(/^\uFEFF/, '');
   const trimmed = body.trim();
   if (trimmed === '') throw new Error('Chưa có nội dung cookie');
   return trimmed.startsWith('[') || trimmed.startsWith('{') ? parseJson(trimmed, nowSec) : parseNetscape(body, nowSec);

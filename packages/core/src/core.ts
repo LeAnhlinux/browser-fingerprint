@@ -507,10 +507,6 @@ export class Core extends EventEmitter {
     return { updated: updates.length, skipped };
   }
 
-  /**
-   * Chạy fn với một kết nối CDP tới hồ sơ. Hồ sơ chưa chạy thì mở ẩn qua Launcher (vẫn qua cầu proxy)
-   * và luôn dừng lại sau đó, kể cả khi fn lỗi.
-   */
   private extensionDirsFor(profileId: string): string[] {
     return this.store.extensionsForProfile(profileId).map((e) => {
       // Luôn tính đường dẫn từ mã extension, không tin cột path trong DB.
@@ -532,15 +528,16 @@ export class Core extends EventEmitter {
     if (this.extensionsDir.includes(',')) throw new Error('Thư mục dữ liệu của ứng dụng chứa dấu phẩy nên không nạp được extension');
     const id = randomUUID();
     const dir = join(this.extensionsDir, id);
+    let ext: Extension;
     try {
       const meta = await installExtensionFiles(sourcePath, dir);
-      const ext = this.store.createExtension({ id, name: meta.name, version: meta.version, path: dir });
-      this.emit('change', '');
-      return ext;
+      ext = this.store.createExtension({ id, name: meta.name, version: meta.version, path: dir });
     } catch (err) {
       await rm(dir, { recursive: true, force: true }).catch(() => {});
       throw err;
     }
+    this.emit('change', '');
+    return ext;
   }
 
   deleteExtension(id: string): void {
@@ -554,8 +551,11 @@ export class Core extends EventEmitter {
     const dir = resolve(this.extensionsDir, id);
     if (dirname(dir) !== resolve(this.extensionsDir)) throw new Error('Mã extension không hợp lệ');
     this.store.deleteExtension(id);
-    rmSync(dir, { recursive: true, force: true });
-    this.emit('change', '');
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } finally {
+      this.emit('change', '');
+    }
   }
 
   setProfileExtensions(profileId: string, extensionIds: string[]): void {
@@ -576,6 +576,10 @@ export class Core extends EventEmitter {
     return this.store.groupExtensionLinks();
   }
 
+  /**
+   * Chạy fn với một kết nối CDP tới hồ sơ. Hồ sơ chưa chạy thì mở ẩn qua Launcher (vẫn qua cầu proxy)
+   * và luôn dừng lại sau đó, kể cả khi fn lỗi.
+   */
   private async withBrowser<T>(id: string, fn: (cdp: CdpSession, temporary: boolean) => Promise<T>): Promise<T> {
     if (typeof id !== 'string' || !this.store.getProfile(id)) throw new Error('Không tìm thấy hồ sơ');
     if (this.cookieBusy.has(id)) throw new Error('Hồ sơ đang có thao tác cookie khác, hãy chờ xong');
@@ -595,7 +599,10 @@ export class Core extends EventEmitter {
           cdp.close();
         }
       } finally {
-        if (temporary) await this.launcher.stop(id);
+        // Chỉ dừng nếu lần chạy hiện tại vẫn là lần chạy ẩn của ta (người dùng có thể đã mở lại hồ sơ có giao diện).
+        if (temporary && this.launcher.status(id)?.headless === true) {
+          await this.launcher.stop(id).catch(() => {});
+        }
       }
     } finally {
       this.cookieBusy.delete(id);

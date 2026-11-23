@@ -93,7 +93,7 @@ export function parseCrx(buf: Buffer): CrxParts {
     const keyLen = buf.readUInt32LE(8);
     const start = 16 + keyLen + buf.readUInt32LE(12);
     if (start > buf.length) throw new Error(BAD);
-    return { zip: buf.subarray(start), publicKey: Buffer.from(buf.subarray(16, 16 + keyLen)) };
+    return { zip: buf.subarray(start), publicKey: keyLen === 0 ? null : Buffer.from(buf.subarray(16, 16 + keyLen)) };
   }
   throw new Error(BAD);
 }

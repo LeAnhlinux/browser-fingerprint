@@ -93,7 +93,7 @@ export function openCdp(url: string, opts: CdpOptions = {}): Promise<CdpSession>
       } catch {
         return;
       }
-      if (typeof msg.id !== 'number') return;
+      if (!msg || typeof msg.id !== 'number') return;
       const p = pending.get(msg.id);
       if (!p) return;
       pending.delete(msg.id);

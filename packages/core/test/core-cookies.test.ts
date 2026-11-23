@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CdpError, type CdpSession } from '../src/cdp';
 import { Core } from '../src/core';
 
@@ -157,6 +157,21 @@ describe('Core: cookie', () => {
     release();
     await expect(first).resolves.toMatchObject({ imported: 1 });
     await expect(core.exportCookies(p.id)).resolves.toMatchObject({ count: 1 });
+  });
+
+  it('hồ sơ mở tạm bị người dùng mở lại có giao diện giữa chừng: không dừng lần chạy mới', async () => {
+    const p = core.createProfile({ name: 'a' });
+    let release = (): void => {};
+    hold = new Promise<void>((r) => { release = r; });
+    const first = core.importCookies(p.id, json([persistent('a')]));
+    await vi.waitFor(() => expect(cdpCalls).toContain('Storage.setCookies'));
+    await core.launcher.stop(p.id);
+    await core.launch(p.id);
+    release();
+    await first;
+    expect(spawned).toHaveLength(2);
+    expect(spawned[1]).not.toContain('--headless=new');
+    expect(core.launcher.status(p.id)).not.toBeNull();
   });
 
   it('từ chối nội dung quá dài, tham số sai kiểu và hồ sơ không tồn tại', async () => {
