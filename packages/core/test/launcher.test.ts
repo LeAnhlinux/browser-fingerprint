@@ -1,0 +1,160 @@
+import type { spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { LaunchError, Launcher, type LauncherDeps } from '../src/launcher';
+import { ProfileStore } from '../src/store';
+
+class FakeChild extends EventEmitter {
+  pid = 4242;
+  killed = false;
+  kill(): boolean {
+    this.killed = true;
+    queueMicrotask(() => this.emit('exit', 0));
+    return true;
+  }
+}
+
+function fakeSpawn(writeCdp = true) {
+  const calls: { exe: string; args: string[]; child: FakeChild }[] = [];
+  const impl = ((exe: string, args: string[]) => {
+    const child = new FakeChild();
+    calls.push({ exe, args, child });
+    const dir = args.find((a) => a.startsWith('--user-data-dir='))!.slice('--user-data-dir='.length);
+    if (writeCdp) writeFileSync(join(dir, 'DevToolsActivePort'), '9333\n/devtools/browser/abc\n');
+    else queueMicrotask(() => child.emit('exit', 1));
+    return child;
+  }) as unknown as typeof spawn;
+  return { impl, calls };
+}
+
+let store: ProfileStore;
+let profilesDir: string;
+let bridgeClosed: number;
+let deps: LauncherDeps;
+let sp: ReturnType<typeof fakeSpawn>;
+
+beforeEach(() => {
+  store = new ProfileStore(':memory:');
+  profilesDir = mkdtempSync(join(tmpdir(), 'bf-launch-'));
+  bridgeClosed = 0;
+  sp = fakeSpawn();
+  deps = {
+    store,
+    engine: { executablePath: () => '/engine/chrome', release: () => ({ version: '1.2.3' }) },
+    profilesDir,
+    secrets: { encrypt: (s) => `enc:${s}`, decrypt: (s) => s.replace(/^enc:/, '') },
+    spawnImpl: sp.impl,
+    openBridge: async () => ({ url: 'http://127.0.0.1:5555', close: async () => { bridgeClosed++; } }),
+    checkReachable: async () => {},
+    closeBrowser: async () => { throw new Error('không có CDP thật'); },
+    cdpTimeoutMs: 500,
+  };
+});
+
+describe('Launcher', () => {
+  it('khởi chạy với đúng cờ và trả thông tin CDP', async () => {
+    const p = store.createProfile({ name: 'a', lang: 'en-US', acceptLang: 'en-US,en', timezone: 'UTC', platform: 'macos' });
+    const l = new Launcher(deps);
+    const info = await l.launch(p.id);
+    expect(info.cdpPort).toBe(9333);
+    expect(info.cdpUrl).toBe('ws://127.0.0.1:9333/devtools/browser/abc');
+    expect(info.pid).toBe(4242);
+    const { exe, args } = sp.calls[0];
+    expect(exe).toBe('/engine/chrome');
+    expect(args).toContain(`--user-data-dir=${join(profilesDir, p.id)}`);
+    expect(args).toContain(`--fingerprint=${p.seed}`);
+    expect(args).toContain('--timezone=UTC');
+    expect(args).toContain('--remote-debugging-port=0');
+    expect(args.some((a) => a.startsWith('--proxy-server='))).toBe(false);
+    expect(l.status(p.id)).toEqual(info);
+    expect(store.getProfile(p.id)!.engineVersion).toBe('1.2.3');
+  });
+
+  it('không cho mở lần hai khi đang chạy', async () => {
+    const p = store.createProfile({ name: 'a' });
+    const l = new Launcher(deps);
+    await l.launch(p.id);
+    await expect(l.launch(p.id)).rejects.toThrow(LaunchError);
+    expect(sp.calls.length).toBe(1);
+  });
+
+  it('chưa cài nhân thì báo lỗi', async () => {
+    const p = store.createProfile({ name: 'a' });
+    const l = new Launcher({ ...deps, engine: { executablePath: () => null, release: () => ({ version: '1.2.3' }) } });
+    await expect(l.launch(p.id)).rejects.toThrow('Chưa cài nhân trình duyệt');
+  });
+
+  it('có proxy thì trỏ trình duyệt vào cầu cục bộ và giải mã mật khẩu', async () => {
+    const x = store.createProxy({ protocol: 'socks5', host: '9.9.9.9', port: 1080, username: 'u', passwordEncrypted: 'enc:secret' });
+    const p = store.createProfile({ name: 'a', proxyId: x.id });
+    let seen: unknown;
+    const l = new Launcher({ ...deps, openBridge: async (u) => { seen = u; return { url: 'http://127.0.0.1:5555', close: async () => { bridgeClosed++; } }; } });
+    await l.launch(p.id);
+    expect(seen).toEqual({ protocol: 'socks5', host: '9.9.9.9', port: 1080, username: 'u', password: 'secret' });
+    expect(sp.calls[0].args).toContain('--proxy-server=http://127.0.0.1:5555');
+  });
+
+  it('proxy không kết nối được thì không chạy nhân', async () => {
+    const x = store.createProxy({ protocol: 'http', host: '9.9.9.9', port: 8080, username: null, passwordEncrypted: null });
+    const p = store.createProfile({ name: 'a', proxyId: x.id });
+    const l = new Launcher({ ...deps, checkReachable: async () => { throw new Error('refused'); } });
+    await expect(l.launch(p.id)).rejects.toThrow('Proxy 9.9.9.9:8080 không kết nối được');
+    expect(sp.calls.length).toBe(0);
+    expect(l.status(p.id)).toBeNull();
+  });
+
+  it('nhân thoát thì trạng thái về dừng, đóng cầu proxy, phát sự kiện', async () => {
+    const x = store.createProxy({ protocol: 'http', host: '9.9.9.9', port: 8080, username: null, passwordEncrypted: null });
+    const p = store.createProfile({ name: 'a', proxyId: x.id });
+    const l = new Launcher(deps);
+    const changes: string[] = [];
+    l.on('change', (id) => changes.push(id));
+    await l.launch(p.id);
+    expect(existsSync(join(profilesDir, p.id, '.bf-run.json'))).toBe(true);
+    await l.stop(p.id);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(sp.calls[0].child.killed).toBe(true);
+    expect(l.status(p.id)).toBeNull();
+    expect(l.lastExitCode(p.id)).toBe(0);
+    expect(bridgeClosed).toBe(1);
+    expect(existsSync(join(profilesDir, p.id, '.bf-run.json'))).toBe(false);
+    expect(changes).toEqual([p.id, p.id]);
+  });
+
+  it('nhân thoát trước khi có CDP thì báo lỗi và đóng cầu proxy', async () => {
+    const dead = fakeSpawn(false);
+    const x = store.createProxy({ protocol: 'http', host: '9.9.9.9', port: 8080, username: null, passwordEncrypted: null });
+    const p = store.createProfile({ name: 'a', proxyId: x.id });
+    const l = new Launcher({ ...deps, spawnImpl: dead.impl });
+    await expect(l.launch(p.id)).rejects.toThrow(LaunchError);
+    expect(bridgeClosed).toBe(1);
+    expect(l.status(p.id)).toBeNull();
+  });
+
+  it('cleanupStale diệt tiến trình còn sót và xoá khoá', async () => {
+    const dir = join(profilesDir, 'old');
+    mkdirSync(dir);
+    writeFileSync(join(dir, '.bf-run.json'), JSON.stringify({ pid: 777 }));
+    writeFileSync(join(dir, 'SingletonLock'), '');
+    const killed: number[] = [];
+    const l = new Launcher({ ...deps, pidCommand: async () => `/engine/chrome --user-data-dir=${dir}`, killPid: (pid) => killed.push(pid) });
+    await l.cleanupStale();
+    expect(killed).toEqual([777]);
+    expect(existsSync(join(dir, '.bf-run.json'))).toBe(false);
+    expect(existsSync(join(dir, 'SingletonLock'))).toBe(false);
+  });
+
+  it('cleanupStale không diệt pid đã bị tiến trình khác dùng lại', async () => {
+    const dir = join(profilesDir, 'old');
+    mkdirSync(dir);
+    writeFileSync(join(dir, '.bf-run.json'), JSON.stringify({ pid: 777 }));
+    const killed: number[] = [];
+    const l = new Launcher({ ...deps, pidCommand: async () => '/usr/bin/some-other-app', killPid: (pid) => killed.push(pid) });
+    await l.cleanupStale();
+    expect(killed).toEqual([]);
+    expect(existsSync(join(dir, '.bf-run.json'))).toBe(false);
+  });
+});

@@ -1,0 +1,230 @@
+import { type ChildProcess, execFile, spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import { fingerprintArgs } from './fingerprint';
+import { ProxyBridge, type Upstream, assertReachable } from './proxy-bridge';
+import type { ProfileStore } from './store';
+import type { SecretBox } from './types';
+
+const exec = promisify(execFile);
+const CDP_FILE = 'DevToolsActivePort';
+const RUN_FILE = '.bf-run.json';
+const LOCK_FILES = ['SingletonLock', 'SingletonCookie', 'SingletonSocket', 'lockfile'];
+
+export interface RunInfo {
+  profileId: string;
+  pid: number;
+  cdpPort: number;
+  cdpUrl: string;
+  startedAt: number;
+}
+
+export class LaunchError extends Error {}
+
+export interface BridgeLike {
+  url: string;
+  close(): Promise<void>;
+}
+
+export interface LauncherDeps {
+  store: ProfileStore;
+  engine: { executablePath(): string | null; release(): { version: string } };
+  profilesDir: string;
+  secrets: SecretBox;
+  spawnImpl?: typeof spawn;
+  openBridge?: (u: Upstream) => Promise<BridgeLike>;
+  checkReachable?: (host: string, port: number) => Promise<void>;
+  closeBrowser?: (cdpUrl: string) => Promise<void>;
+  pidCommand?: (pid: number) => Promise<string | null>;
+  killPid?: (pid: number) => void;
+  cdpTimeoutMs?: number;
+}
+
+interface Entry {
+  child: ChildProcess;
+  info: RunInfo;
+  /** Hoàn tất khi nhân đã thoát và trạng thái đã được dọn xong. */
+  cleanedUp: Promise<void>;
+}
+
+export function cdpBrowserClose(cdpUrl: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(cdpUrl);
+    ws.addEventListener('open', () => {
+      ws.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
+      resolve();
+    });
+    ws.addEventListener('error', () => reject(new Error('Không kết nối được CDP')));
+  });
+}
+
+export async function pidCommand(pid: number): Promise<string | null> {
+  try {
+    if (process.platform === 'win32') {
+      const { stdout } = await exec('powershell', [
+        '-NoProfile', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`,
+      ]);
+      return stdout.trim() || null;
+    }
+    const { stdout } = await exec('ps', ['-p', String(pid), '-o', 'command=']);
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+async function waitForCdpFile(dir: string, timeoutMs: number, signal: AbortSignal): Promise<{ port: number; path: string }> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline && !signal.aborted) {
+    const raw = await readFile(join(dir, CDP_FILE), 'utf8').catch(() => null);
+    if (raw) {
+      const [port, path] = raw.split('\n');
+      if (Number(port) > 0 && path) return { port: Number(port), path: path.trim() };
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new LaunchError('Nhân không mở cổng CDP kịp thời gian');
+}
+
+export class Launcher extends EventEmitter {
+  private runs = new Map<string, Entry>();
+  private starting = new Set<string>();
+  private exitCodes = new Map<string, number | null>();
+
+  constructor(private deps: LauncherDeps) {
+    super();
+  }
+
+  lastExitCode(profileId: string): number | null {
+    return this.exitCodes.get(profileId) ?? null;
+  }
+
+  status(profileId: string): RunInfo | null {
+    return this.runs.get(profileId)?.info ?? null;
+  }
+
+  async launch(profileId: string): Promise<RunInfo> {
+    if (this.runs.has(profileId) || this.starting.has(profileId)) throw new LaunchError('Hồ sơ đang chạy');
+    this.starting.add(profileId);
+    let bridge: BridgeLike | null = null;
+    let child: ChildProcess | null = null;
+    const abort = new AbortController();
+    try {
+      const profile = this.deps.store.getProfile(profileId);
+      if (!profile) throw new LaunchError('Không tìm thấy hồ sơ');
+      const exe = this.deps.engine.executablePath();
+      if (!exe) throw new LaunchError('Chưa cài nhân trình duyệt');
+      const dir = join(this.deps.profilesDir, profileId);
+      await mkdir(dir, { recursive: true });
+      await rm(join(dir, CDP_FILE), { force: true });
+      const args = [
+        `--user-data-dir=${dir}`,
+        ...fingerprintArgs(profile),
+        '--remote-debugging-port=0',
+        '--no-first-run',
+        '--no-default-browser-check',
+      ];
+      if (profile.proxyId) {
+        const proxy = this.deps.store.getProxy(profile.proxyId);
+        if (!proxy) throw new LaunchError('Proxy của hồ sơ không còn tồn tại');
+        try {
+          await (this.deps.checkReachable ?? assertReachable)(proxy.host, proxy.port);
+        } catch {
+          throw new LaunchError(`Proxy ${proxy.host}:${proxy.port} không kết nối được`);
+        }
+        const open = this.deps.openBridge ?? ((u: Upstream) => ProxyBridge.open(u));
+        bridge = await open({
+          protocol: proxy.protocol,
+          host: proxy.host,
+          port: proxy.port,
+          username: proxy.username,
+          password: proxy.passwordEncrypted ? this.deps.secrets.decrypt(proxy.passwordEncrypted) : null,
+        });
+        args.push(`--proxy-server=${bridge.url}`);
+      }
+      child = (this.deps.spawnImpl ?? spawn)(exe, args, { stdio: 'ignore' });
+      const spawned = child;
+      const exit = new Promise<number | null>((resolve) => spawned.once('exit', (code) => resolve(code)));
+      const cdp = await Promise.race([
+        waitForCdpFile(dir, this.deps.cdpTimeoutMs ?? 20_000, abort.signal),
+        exit.then((code) => {
+          throw new LaunchError(`Nhân thoát ngay khi khởi động (mã ${code})`);
+        }),
+      ]);
+      const info: RunInfo = {
+        profileId,
+        pid: spawned.pid ?? 0,
+        cdpPort: cdp.port,
+        cdpUrl: `ws://127.0.0.1:${cdp.port}${cdp.path}`,
+        startedAt: Date.now(),
+      };
+      const liveBridge = bridge;
+      const cleanedUp = exit.then(async (code) => {
+        this.runs.delete(profileId);
+        this.exitCodes.set(profileId, code);
+        await liveBridge?.close().catch(() => {});
+        await rm(join(dir, RUN_FILE), { force: true });
+        this.emit('change', profileId);
+      });
+      this.runs.set(profileId, { child: spawned, info, cleanedUp });
+      await writeFile(join(dir, RUN_FILE), JSON.stringify({ pid: info.pid }));
+      this.deps.store.markLaunched(profileId, this.deps.engine.release().version);
+      this.emit('change', profileId);
+      return info;
+    } catch (err) {
+      if (child && !this.runs.has(profileId)) child.kill();
+      await bridge?.close().catch(() => {});
+      throw err;
+    } finally {
+      abort.abort();
+      this.starting.delete(profileId);
+    }
+  }
+
+  async stop(profileId: string): Promise<void> {
+    const entry = this.runs.get(profileId);
+    if (!entry) return;
+    try {
+      await (this.deps.closeBrowser ?? cdpBrowserClose)(entry.info.cdpUrl);
+    } catch {
+      entry.child.kill();
+    }
+    const timer = setTimeout(() => entry.child.kill('SIGKILL'), 5000);
+    await entry.cleanedUp;
+    clearTimeout(timer);
+  }
+
+  async stopAll(): Promise<void> {
+    await Promise.all([...this.runs.keys()].map((id) => this.stop(id)));
+  }
+
+  async cleanupStale(): Promise<void> {
+    const names = await readdir(this.deps.profilesDir).catch(() => [] as string[]);
+    for (const name of names) {
+      const dir = join(this.deps.profilesDir, name);
+      const runFile = join(dir, RUN_FILE);
+      const raw = await readFile(runFile, 'utf8').catch(() => null);
+      if (raw === null) continue;
+      let pid = 0;
+      try {
+        pid = Number(JSON.parse(raw).pid) || 0;
+      } catch {
+        pid = 0;
+      }
+      if (pid > 0) {
+        const cmd = await (this.deps.pidCommand ?? pidCommand)(pid);
+        if (cmd?.includes(dir)) {
+          try {
+            (this.deps.killPid ?? ((p: number) => process.kill(p)))(pid);
+          } catch {
+            // tiến trình đã tự thoát
+          }
+        }
+      }
+      await rm(runFile, { force: true });
+      for (const f of LOCK_FILES) await rm(join(dir, f), { force: true });
+    }
+  }
+}
