@@ -1,7 +1,8 @@
 import type { Extension, Group, Platform, ProfileInput, ProfileView, ProxyView } from '@bf/core'
 import { IconTrash } from '@tabler/icons-react'
 import { useState } from 'react'
-import { proxyOption } from './format'
+import { FingerprintCard } from './FingerprintCard'
+import { SCREEN_PRESETS, proxyOption } from './format'
 import { Banner } from './ui'
 
 interface Props {
@@ -52,12 +53,60 @@ export function ProfileForm({
   const [cores, setCores] = useState(
     profile?.hardwareConcurrency ? String(profile.hardwareConcurrency) : ''
   )
+  const [screenW, setScreenW] = useState(profile?.screenWidth ? String(profile.screenWidth) : '')
+  const [screenH, setScreenH] = useState(profile?.screenHeight ? String(profile.screenHeight) : '')
+  const [screenScale, setScreenScale] = useState(String(profile?.screenScale ?? 1))
+  const [customScreen, setCustomScreen] = useState(false)
   const [notes, setNotes] = useState(profile?.notes ?? '')
   const [extIds, setExtIds] = useState<Set<string>>(new Set(profile?.extensionIds ?? []))
 
   const running = profile?.run != null
   const proxy = proxies.find((x) => x.id === proxyId)
   const proxyTz = proxy?.lastStatus === 'ok' ? proxy.lastTimezone : null
+
+  const presets = SCREEN_PRESETS[platform]
+  const hasScreen = screenW !== '' && screenH !== ''
+  const presetIndex = hasScreen
+    ? presets.findIndex(
+        (x) =>
+          String(x.width) === screenW &&
+          String(x.height) === screenH &&
+          String(x.scale) === screenScale
+      )
+    : -1
+  const screenChoice =
+    !hasScreen && !customScreen
+      ? 'real'
+      : presetIndex >= 0 && !customScreen
+        ? String(presetIndex)
+        : 'custom'
+  const pickScreen = (v: string): void => {
+    if (v === 'real') {
+      setCustomScreen(false)
+      setScreenW('')
+      setScreenH('')
+      setScreenScale('1')
+    } else if (v === 'custom') {
+      setCustomScreen(true)
+      if (!hasScreen) {
+        setScreenW('1920')
+        setScreenH('1080')
+      }
+    } else {
+      const x = presets[Number(v)]
+      setCustomScreen(false)
+      setScreenW(String(x.width))
+      setScreenH(String(x.height))
+      setScreenScale(String(x.scale))
+    }
+  }
+  const fpDirty =
+    profile !== null &&
+    (platform !== profile.platform ||
+      (cores ? Number(cores) : null) !== profile.hardwareConcurrency ||
+      lang.trim() !== profile.lang ||
+      acceptLang.trim() !== profile.acceptLang ||
+      timezone.trim() !== profile.timezone)
 
   const submit = (): void => {
     onSave({
@@ -69,13 +118,26 @@ export function ProfileForm({
       acceptLang: acceptLang.trim(),
       timezone: timezone.trim(),
       hardwareConcurrency: cores ? Number(cores) : null,
+      screenWidth: hasScreen ? Number(screenW) : null,
+      screenHeight: hasScreen ? Number(screenH) : null,
+      screenScale: hasScreen ? Number(screenScale) : null,
       notes,
       extensionIds: extensions.filter((x) => extIds.has(x.id)).map((x) => x.id)
     })
   }
 
+  const screenOk =
+    !hasScreen ||
+    (Number.isInteger(Number(screenW)) &&
+      Number(screenW) >= 320 &&
+      Number(screenW) <= 7680 &&
+      Number.isInteger(Number(screenH)) &&
+      Number(screenH) >= 240 &&
+      Number(screenH) <= 4320)
   const valid =
     !saving &&
+    screenOk &&
+    (screenW === '') === (screenH === '') &&
     name.trim() !== '' &&
     lang.trim() !== '' &&
     acceptLang.trim() !== '' &&
@@ -217,13 +279,66 @@ export function ProfileForm({
               GPU. Chỉ dùng khi bạn hiểu rủi ro.
             </Banner>
           )}
+          <div className="field">
+            <label htmlFor="pf-screen">Màn hình</label>
+            <select
+              id="pf-screen"
+              value={screenChoice}
+              onChange={(e) => pickScreen(e.target.value)}
+            >
+              <option value="real">Màn hình thật của máy (không giả)</option>
+              {presets.map((x, i) => (
+                <option key={x.label} value={String(i)}>
+                  {x.label}
+                </option>
+              ))}
+              <option value="custom">Tự nhập…</option>
+            </select>
+            {screenChoice === 'custom' && (
+              <div className="grid-3" style={{ marginTop: 8 }}>
+                <input
+                  aria-label="Chiều rộng màn hình"
+                  type="number"
+                  min="320"
+                  max="7680"
+                  value={screenW}
+                  onChange={(e) => setScreenW(e.target.value)}
+                  placeholder="Rộng"
+                />
+                <input
+                  aria-label="Chiều cao màn hình"
+                  type="number"
+                  min="240"
+                  max="4320"
+                  value={screenH}
+                  onChange={(e) => setScreenH(e.target.value)}
+                  placeholder="Cao"
+                />
+                <select
+                  aria-label="Tỉ lệ điểm ảnh"
+                  value={screenScale}
+                  onChange={(e) => setScreenScale(e.target.value)}
+                >
+                  {['1', '1.25', '1.5', '1.75', '2', '3'].map((v) => (
+                    <option key={v} value={v}>
+                      Tỉ lệ {v}×
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <span className="hint">
+              {hasScreen
+                ? 'Để giả màn hình, hồ sơ này tắt tính năng cách ly trang theo tên miền của Chromium: kém an toàn hơn một chút trước trang độc hại.'
+                : 'Trang web sẽ thấy độ phân giải màn hình thật của máy bạn.'}
+            </span>
+          </div>
           {profile ? (
-            <p className="faint">
-              Seed dấu vân tay: <span className="mono">{profile.seed}</span> (cố định cho hồ sơ này)
-            </p>
+            <FingerprintCard profile={profile} dirty={fpDirty} />
           ) : (
             <p className="faint">
-              Seed dấu vân tay được sinh ngẫu nhiên khi tạo và không đổi về sau.
+              GPU, CPU, RAM do nhân chọn theo một seed ngẫu nhiên. Sau khi tạo, mở lại hồ sơ để xem
+              trang web sẽ thấy gì.
             </p>
           )}
         </section>

@@ -379,3 +379,33 @@ describe('Launcher', () => {
     expect(l.isActive(p.id)).toBe(false);
   });
 });
+
+describe('Launcher: màn hình giả', () => {
+  it('có màn hình thì thêm cờ, giữ màn hình qua CDP; không có thì không', async () => {
+    const kept: { url: string; screen: unknown }[] = [];
+    let closed = 0;
+    const l = new Launcher({ ...deps, keepScreen: async (url, screen) => { kept.push({ url, screen }); return { close: () => { closed++; } }; } });
+    const plain = store.createProfile({ name: 'a' });
+    await l.launch(plain.id);
+    expect(sp.calls[0].args.some((a) => a.includes('site-isolation'))).toBe(false);
+    expect(kept).toHaveLength(0);
+
+    const p = store.createProfile({ name: 'b', screenWidth: 1366, screenHeight: 768, screenScale: 1 });
+    await l.launch(p.id);
+    const args = sp.calls[1].args;
+    expect(args).toContain('--disable-site-isolation-trials');
+    expect(args).toContain('--disable-features=IsolateOrigins,site-per-process');
+    expect(args).toContain('--window-size=1280,688');
+    expect(kept).toEqual([{ url: 'ws://127.0.0.1:9333/devtools/browser/abc', screen: { width: 1366, height: 768, scale: 1 } }]);
+    await l.stop(p.id);
+    expect(closed).toBe(1);
+  });
+
+  it('không giữ được màn hình giả thì không chạy (không để lộ màn hình thật)', async () => {
+    const p = store.createProfile({ name: 'b', screenWidth: 1920, screenHeight: 1080 });
+    const l = new Launcher({ ...deps, keepScreen: async () => { throw new Error('hỏng'); } });
+    await expect(l.launch(p.id)).rejects.toThrow('Không đặt được màn hình giả: hỏng');
+    expect(sp.calls[0].child.killed).toBe(true);
+    expect(l.isActive(p.id)).toBe(false);
+  });
+});

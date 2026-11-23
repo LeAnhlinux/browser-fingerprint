@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { type IncomingMessage, type ServerResponse, createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { CookieImportResult, CoreInfo, Group, Profile, ProfileFilter, ProfileInput, ProfileUpdate, ProfileView, ProxyView, RunInfo } from '@bf/core';
+import type { CookieImportResult, CoreInfo, FingerprintSnapshot, Group, Profile, ProfileFilter, ProfileInput, ProfileUpdate, ProfileView, ProxyView, RunInfo } from '@bf/core';
 import { DEFAULT_PORT } from './token';
 
 /** Những gì máy chủ cần ở lõi. Đối tượng Core thật thoả mãn giao diện này. */
@@ -14,6 +14,8 @@ export interface ApiCore {
   deleteProfile(id: string): void;
   launch(id: string, opts?: { headless?: boolean }): Promise<RunInfo>;
   stop(id: string): Promise<void>;
+  measureFingerprint(id: string): Promise<FingerprintSnapshot>;
+  regenerateFingerprint(id: string): Profile;
   importCookies(id: string, text: string): Promise<CookieImportResult>;
   exportCookies(id: string): Promise<{ count: number; json: string }>;
   listGroups(): Group[];
@@ -44,6 +46,7 @@ const HOST = '127.0.0.1';
 const MAX_BODY = 6_000_000;
 const PROFILE_FIELDS = new Set([
   'name', 'groupId', 'notes', 'platform', 'platformVersion', 'brand', 'hardwareConcurrency',
+  'screenWidth', 'screenHeight', 'screenScale',
   'lang', 'acceptLang', 'timezone', 'proxyId', 'extensionIds',
 ]);
 const NEED_OBJECT = 'Thân yêu cầu phải là một đối tượng JSON';
@@ -172,6 +175,11 @@ function buildRoutes(core: ApiCore): Route[] {
       const running = core.getProfile(id).run;
       if (running) return running;
       return core.launch(id, { headless: isRecord(body) && body.headless === true });
+    }),
+    route('POST', `profiles/${ID}/fingerprint/measure`, ({ id }) => core.measureFingerprint(id)),
+    route('POST', `profiles/${ID}/fingerprint/regenerate`, ({ id }) => {
+      core.regenerateFingerprint(id);
+      return core.getProfile(id);
     }),
     route('POST', `profiles/${ID}/stop`, async ({ id }) => {
       core.getProfile(id);

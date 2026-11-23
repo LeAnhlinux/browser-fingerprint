@@ -33,3 +33,31 @@ export function fingerprintArgs(p: Profile): string[] {
   args.push(`--lang=${p.lang}`, `--accept-lang=${p.acceptLang}`, `--timezone=${p.timezone}`);
   return args;
 }
+
+export interface ScreenSpec {
+  width: number;
+  height: number;
+  scale: number;
+}
+
+export function profileScreen(p: Pick<Profile, 'screenWidth' | 'screenHeight' | 'screenScale'>): ScreenSpec | null {
+  if (!p.screenWidth || !p.screenHeight) return null;
+  return { width: p.screenWidth, height: p.screenHeight, scale: p.screenScale ?? 1 };
+}
+
+/**
+ * Cờ đi kèm khi giả màn hình. Nhân không cho đặt màn hình cho iframe khác tên miền chạy ở tiến trình riêng,
+ * nên tắt cách ly theo tên miền để iframe dùng chung màn hình giả với trang chứa nó.
+ * Cửa sổ mở ra vừa trong màn hình giả, tránh cửa sổ to hơn cả màn hình.
+ */
+export function screenArgs(s: ScreenSpec | null): string[] {
+  if (!s) return [];
+  const w = Math.min(1280, s.width);
+  const h = Math.min(800, s.height - 80);
+  return ['--disable-site-isolation-trials', '--disable-features=IsolateOrigins,site-per-process', `--window-size=${w},${h}`];
+}
+
+/** Khoá thay đổi khi bất kỳ tham số nào ảnh hưởng tới kết quả đo vân tay thay đổi. */
+export function fingerprintKey(p: Profile, engineVersion: string): string {
+  return [engineVersion, ...fingerprintArgs(p)].join('|');
+}

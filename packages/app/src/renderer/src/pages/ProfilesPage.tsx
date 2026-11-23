@@ -12,6 +12,7 @@ import { BulkBar } from '../BulkBar'
 import { BulkCreateForm } from '../BulkCreateForm'
 import { ProfileDrawer, type DrawerTab } from '../ProfileDrawer'
 import { api } from '../api'
+import { gpuShort } from '../format'
 import { Banner, RunStatus } from '../ui'
 
 interface Props {
@@ -240,6 +241,10 @@ export function ProfilesPage(props: Props): React.JSX.Element {
                       <div className="cell-title">{p.name}</div>
                       <div className="cell-sub">
                         {PLATFORM_SHORT[p.platform]} · {p.timezone}
+                        {gpuShort(p.fingerprint?.gpuRenderer)
+                          ? ` · ${gpuShort(p.fingerprint?.gpuRenderer)}`
+                          : ''}
+                        {p.screenWidth ? ` · ${p.screenWidth}×${p.screenHeight}` : ''}
                         {p.notes ? ` · ${p.notes.split('\n')[0].slice(0, 40)}` : ''}
                       </div>
                     </td>

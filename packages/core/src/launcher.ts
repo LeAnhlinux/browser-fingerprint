@@ -3,7 +3,8 @@ import { EventEmitter } from 'node:events';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { fingerprintArgs } from './fingerprint';
+import { type ScreenSpec, fingerprintArgs, profileScreen, screenArgs } from './fingerprint';
+import { type ScreenKeeper, startScreenKeeper } from './screen-keeper';
 import { ProxyBridge, type Upstream, assertReachable } from './proxy-bridge';
 import type { ProfileStore } from './store';
 import type { SecretBox } from './types';
@@ -51,6 +52,8 @@ export interface LauncherDeps {
   killAfterMs?: number;
   /** Đếm tab đang mở qua cổng CDP; null khi không hỏi được. */
   countPages?: (cdpPort: number) => Promise<number | null>;
+  /** Mở kết nối giữ màn hình giả cho mọi tab. */
+  keepScreen?: (cdpUrl: string, screen: ScreenSpec) => Promise<ScreenKeeper>;
   /** Chu kỳ kiểm tra cửa sổ (ms). 0 thì tắt: đóng hết cửa sổ không dừng hồ sơ. */
   windowWatchMs?: number;
 }
@@ -167,6 +170,7 @@ export class Launcher extends EventEmitter {
     this.starting.add(profileId);
     let bridge: BridgeLike | null = null;
     let child: ChildProcess | null = null;
+    let keeper: ScreenKeeper | null = null;
     const abort = new AbortController();
     try {
       const profile = this.deps.store.getProfile(profileId);
@@ -174,9 +178,11 @@ export class Launcher extends EventEmitter {
       const exe = this.deps.engine.executablePath();
       if (!exe) throw new LaunchError('Chưa cài nhân trình duyệt');
       const dir = join(this.deps.profilesDir, profileId);
+      const screen = profileScreen(profile);
       const args = [
         `--user-data-dir=${dir}`,
         ...fingerprintArgs(profile),
+        ...screenArgs(screen),
         '--remote-debugging-port=0',
         '--no-first-run',
         '--no-default-browser-check',
@@ -235,13 +241,23 @@ export class Launcher extends EventEmitter {
         startedAt: Date.now(),
         headless: opts.headless === true,
       };
+      // Giả màn hình thất bại thì không chạy, như proxy: thà không mở còn hơn lộ màn hình thật.
+      if (screen) {
+        try {
+          keeper = await (this.deps.keepScreen ?? startScreenKeeper)(info.cdpUrl, screen);
+        } catch (e) {
+          throw new LaunchError(`Không đặt được màn hình giả: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
       // Mọi bước có thể lỗi phải xong trước khi đăng ký chạy, để catch dọn đúng.
       await writeFile(join(dir, RUN_FILE), JSON.stringify({ pid: info.pid }));
       this.deps.store.markLaunched(profileId, this.deps.engine.release().version);
       if (exited) throw new LaunchError('Nhân đã thoát trong lúc khởi động');
       const liveBridge = bridge;
+      const liveKeeper = keeper;
       const cleanedUp = exit.then(async (code) => {
         try {
+          liveKeeper?.close();
           this.exitCodes.set(profileId, code);
           await liveBridge?.close().catch(() => {});
           await rm(join(dir, RUN_FILE), { force: true });
@@ -257,6 +273,7 @@ export class Launcher extends EventEmitter {
       this.emit('change', profileId);
       return info;
     } catch (err) {
+      keeper?.close();
       try {
         child?.kill();
       } catch {

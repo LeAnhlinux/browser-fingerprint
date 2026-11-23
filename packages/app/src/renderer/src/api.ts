@@ -15,7 +15,8 @@ import type {
   ProfileView,
   ProxyPatch,
   ProxyView,
-  RunInfo
+  RunInfo,
+  FingerprintSnapshot
 } from '@bf/core'
 
 const call = <T>(method: string, ...args: unknown[]): Promise<T> =>
@@ -47,6 +48,8 @@ export const api = {
     call<void>('setGroupExtensions', groupId, extensionIds),
   listGroupExtensions: () => call<Record<string, string[]>>('listGroupExtensions'),
   deleteProfile: (id: string) => call<void>('deleteProfile', id),
+  measureFingerprint: (id: string) => call<FingerprintSnapshot>('measureFingerprint', id),
+  regenerateFingerprint: (id: string) => call<Profile>('regenerateFingerprint', id),
   listGroups: () => call<Group[]>('listGroups'),
   createGroup: (name: string) => call<Group>('createGroup', name),
   renameGroup: (id: string, name: string) => call<void>('renameGroup', id, name),

@@ -877,3 +877,40 @@ input[type='file'] {
   justify-content: center;
   color: var(--text-3);
 }
+
+/* Dấu vân tay đo được */
+.grid-3 {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 0 8px;
+}
+.fp-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: var(--panel-2);
+  margin-top: 4px;
+}
+.fp-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.fp-title {
+  font-weight: 600;
+  margin-right: auto;
+}
+.fp-kv {
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 6px 12px;
+  align-items: start;
+  font-size: 12.5px;
+}
+.fp-raw {
+  font-size: 11px;
+  word-break: break-all;
+}
+.warn-text {
+  color: var(--warn, #b45309);
+}

@@ -12,3 +12,5 @@ export * from './cdp';
 export * from './cookie-parse';
 export * from './crx';
 export * from './extension-files';
+export * from './screen-keeper';
+export * from './fingerprint-probe';

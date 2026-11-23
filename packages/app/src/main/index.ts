@@ -14,6 +14,8 @@ const METHODS = new Set([
   'createProfile',
   'updateProfile',
   'deleteProfile',
+  'measureFingerprint',
+  'regenerateFingerprint',
   'listGroups',
   'createGroup',
   'renameGroup',

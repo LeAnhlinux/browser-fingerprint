@@ -110,8 +110,16 @@ Trang **Hồ sơ** > **Hồ sơ mới**. Bảng bên phải gồm ba phần.
 
 **Dấu vân tay**
 - **Hệ điều hành giả:** để mặc định là hệ điều hành thật của máy. Giả hệ điều hành khác dễ lộ qua font và card đồ hoạ; app cảnh báo nếu bạn đổi.
-- **Số nhân CPU:** bỏ trống để app tự sinh.
-- **Seed dấu vân tay:** sinh ngẫu nhiên khi tạo và **không bao giờ đổi**. Nhờ vậy trang web thấy cùng một "máy" mỗi lần bạn mở hồ sơ.
+- **Số nhân CPU:** bỏ trống để nhân trình duyệt tự chọn.
+- **Màn hình:** chọn một độ phân giải phổ biến cho hệ điều hành giả, hoặc **Tự nhập…** (rộng, cao, tỉ lệ điểm ảnh). Để "Màn hình thật của máy" thì trang web thấy đúng màn hình của bạn, vốn là một chỗ dễ lộ (ví dụ máy Mac giả làm Windows mà màn hình lại là của MacBook).
+  - Khi giả màn hình, hồ sơ đó tắt tính năng cách ly trang theo tên miền của Chromium, nên kém an toàn hơn một chút trước trang độc hại.
+  - Cửa sổ trình duyệt mở vừa trong màn hình giả. Đừng kéo cửa sổ to hơn màn hình giả (ví dụ phóng to toàn màn hình trên màn 4K), vì trang sẽ thấy cửa sổ to hơn cả màn hình.
+- **GPU, RAM, nhiễu canvas, âm thanh, font:** nhân trình duyệt tự chọn theo **seed** của hồ sơ (một mã ngẫu nhiên sinh khi tạo). Seed giữ nguyên nên trang web thấy cùng một "máy" mỗi lần bạn mở hồ sơ. Không gõ tay tên GPU được: bản nhân hiện tại đã bỏ tuỳ chọn này.
+
+**Xem trang web sẽ thấy gì.** Mở một hồ sơ đã tạo: ô **Trang web sẽ thấy** trong phần Dấu vân tay hiện GPU, số nhân CPU, RAM, màn hình, hệ điều hành, múi giờ, ngôn ngữ và User-Agent. App mở ẩn nhân trong vài giây để đo thật, không đụng dữ liệu của hồ sơ, nên đo được cả khi hồ sơ đang chạy. Tên GPU cũng hiện dưới tên hồ sơ trong danh sách.
+
+- **Đo lại:** đo theo thiết lập đã lưu (sửa xong nhớ bấm Lưu trước).
+- **Đổi vân tay:** tạo seed mới, nên GPU, CPU, RAM và các nhiễu đều đổi, rồi đo lại ngay. Bấm đến khi ra cấu hình ưng ý. Với hồ sơ đã đăng nhập tài khoản, đổi vân tay giống như đăng nhập từ một máy khác, nên app hỏi lại trước khi đổi.
 
 **Extension:** nếu thư viện có extension, tick những cái muốn nạp cho hồ sơ này.
 

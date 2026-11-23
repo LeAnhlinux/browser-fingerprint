@@ -80,6 +80,8 @@ Giới hạn: chưa tải extension thẳng từ Chrome Web Store, chưa tự c�
 | `DELETE /v1/profiles/:id` | Xoá hồ sơ (phải dừng trước) |
 | `POST /v1/profiles/:id/start` | Khởi động, trả `cdpUrl`; thân `{"headless": true}` để chạy ẩn; đang chạy thì trả phiên hiện có |
 | `POST /v1/profiles/:id/stop` | Dừng |
+| `POST /v1/profiles/:id/fingerprint/measure` | Đo những gì trang web thấy (GPU, CPU, RAM, User-Agent…), mở ẩn nhân vài giây |
+| `POST /v1/profiles/:id/fingerprint/regenerate` | Đổi seed: GPU, CPU, RAM và các nhiễu đổi theo |
 | `GET /v1/profiles/:id/cookies` | Xuất cookie |
 | `POST /v1/profiles/:id/cookies` | Nhập cookie (thân `{"text": "..."}` hoặc `{"cookies": [...]}`) |
 | `GET /v1/groups`, `GET /v1/proxies` | Liệt kê nhóm, proxy |

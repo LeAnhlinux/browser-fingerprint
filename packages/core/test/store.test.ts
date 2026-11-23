@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { hostDefaults } from '../src/fingerprint';
 import { ProfileStore } from '../src/store';
 
-const MIGRATION_COUNT = 3;
+const MIGRATION_COUNT = 4;
 let store: ProfileStore;
 beforeEach(() => { store = new ProfileStore(':memory:'); });
 
@@ -239,7 +239,7 @@ describe('ProfileStore', () => {
     expect(upgraded.extensionsForProfile('p1').map((e) => e.id)).toEqual(['e1']);
     upgraded.close();
     const check = new DatabaseSync(file);
-    expect((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(3);
+    expect((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(MIGRATION_COUNT);
     check.close();
   });
 });

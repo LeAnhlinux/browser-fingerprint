@@ -7,16 +7,22 @@ import { CdpError, type CdpSession, openCdp } from './cdp';
 import { type CdpCookie, type CookieParam, cookieKey, parseCookies, toExportCookies } from './cookie-parse';
 import { EngineManager, type EngineOptions } from './engine';
 import { installExtensionFiles } from './extension-files';
-import { hostPlatform } from './fingerprint';
+import { fingerprintArgs, fingerprintKey, hostPlatform, randomSeed } from './fingerprint';
+import { type ProbeResult, probeFingerprint } from './fingerprint-probe';
 import { LaunchError, Launcher, type LauncherDeps, type RunInfo } from './launcher';
 import { localeForCountry } from './locale';
 import type { Upstream } from './proxy-bridge';
 import { RATE_LIMITED, type ProxyCheckResult, checkProxy as runProxyCheck, validTimezone } from './proxy-checker';
 import { parseProxyList } from './proxy-parse';
 import { type NewProfile, type NewProxyRow, type ProfileFilter, type ProfilePatch, ProfileStore, type ProxyRowPatch } from './store';
-import type { Extension, Group, Platform, Profile, Proxy, ProxyProtocol, SecretBox } from './types';
+import type { Extension, FingerprintSnapshot, Group, Platform, Profile, Proxy, ProxyProtocol, SecretBox } from './types';
 
-export type ProfileView = Profile & { run: RunInfo | null; extensionIds: string[] };
+export type ProfileView = Profile & {
+  run: RunInfo | null;
+  extensionIds: string[];
+  /** Kết quả đo gần nhất, chỉ có khi vẫn khớp tham số hiện tại của hồ sơ. */
+  fingerprint: FingerprintSnapshot | null;
+};
 export type ProfileInput = NewProfile & { extensionIds?: string[] };
 export type ProfileUpdate = ProfilePatch & { extensionIds?: string[] };
 export type ProxyView = Omit<Proxy, 'passwordEncrypted'> & { hasPassword: boolean };
@@ -50,6 +56,7 @@ export interface CoreOptions {
   lookupUrl?: string;
   proxyCheck?: (u: Upstream) => Promise<ProxyCheckResult>;
   cdpConnect?: (cdpUrl: string) => Promise<CdpSession>;
+  probe?: (exe: string, args: string[]) => Promise<ProbeResult>;
 }
 
 // Quy tắc host (giữ đơn giản): sau khi cắt khoảng trắng phải không rỗng và là tên miền
@@ -139,9 +146,25 @@ const MAX_NOTES = 5000;
 
 // Các trường này thành tham số dòng lệnh của nhân, nên lõi tự kiểm chứ không tin nơi gọi (giao diện hay API).
 function normalizeProfileFields<
-  T extends { platform?: unknown; platformVersion?: unknown; brand?: unknown; hardwareConcurrency?: unknown; notes?: unknown },
+  T extends {
+    platform?: unknown; platformVersion?: unknown; brand?: unknown; hardwareConcurrency?: unknown; notes?: unknown;
+    screenWidth?: unknown; screenHeight?: unknown; screenScale?: unknown;
+  },
 >(input: T): T {
   const next = { ...input };
+  const sw = next.screenWidth;
+  const sh = next.screenHeight;
+  if ((sw === undefined) !== (sh === undefined) || (sw === null) !== (sh === null)) {
+    throw new Error('Cần nhập cả chiều rộng và chiều cao màn hình');
+  }
+  const dim = (v: unknown, min: number, max: number): boolean => typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max;
+  if (sw !== undefined && sw !== null && (!dim(sw, 320, 7680) || !dim(sh, 240, 4320))) {
+    throw new Error('Màn hình phải rộng 320–7680 và cao 240–4320 điểm');
+  }
+  const sc = next.screenScale;
+  if (sc !== undefined && sc !== null && (typeof sc !== 'number' || !(sc >= 0.5 && sc <= 4) || Math.round(sc * 100) !== sc * 100)) {
+    throw new Error('Tỉ lệ điểm ảnh phải từ 0.5 đến 4');
+  }
   if (next.platform !== undefined && !PLATFORMS.includes(next.platform)) throw new Error('Hệ điều hành không hợp lệ');
   if (next.platformVersion !== undefined && next.platformVersion !== null) {
     if (next.platformVersion === '') next.platformVersion = null;
@@ -193,6 +216,8 @@ export class Core extends EventEmitter {
   private proxyCheck: (u: Upstream) => Promise<ProxyCheckResult>;
   private cdpConnect: (cdpUrl: string) => Promise<CdpSession>;
   private cookieBusy = new Set<string>();
+  private probe: (exe: string, args: string[]) => Promise<ProbeResult>;
+  private measuring = new Map<string, Promise<FingerprintSnapshot>>();
 
   constructor(opts: CoreOptions) {
     super();
@@ -204,6 +229,7 @@ export class Core extends EventEmitter {
     this.secrets = opts.secrets;
     this.proxyCheck = opts.proxyCheck ?? ((u) => runProxyCheck(u, { lookupUrl: opts.lookupUrl }));
     this.cdpConnect = opts.cdpConnect ?? ((url) => openCdp(url));
+    this.probe = opts.probe ?? ((exe, args) => probeFingerprint(exe, args));
     this.store = new ProfileStore(join(opts.dataDir, 'db.sqlite'));
     this.engine = new EngineManager({ enginesDir: opts.enginesDir ?? join(opts.dataDir, 'engines'), ...opts.engineOptions });
     this.launcher = new Launcher({
@@ -241,15 +267,61 @@ export class Core extends EventEmitter {
     await this.engine.install(onProgress);
   }
 
+  private view(p: Profile, links: Record<string, string[]>, snaps: ReturnType<ProfileStore['getFingerprintSnapshots']>): ProfileView {
+    const snap = snaps[p.id];
+    const fresh = snap && snap.key === fingerprintKey(p, this.engine.release().version) ? snap.snapshot : null;
+    return { ...p, run: this.launcher.status(p.id), extensionIds: links[p.id] ?? [], fingerprint: fresh };
+  }
+
   listProfiles(filter: ProfileFilter = {}): ProfileView[] {
     const links = this.store.profileExtensionLinks();
-    return this.store.listProfiles(filter).map((p) => ({ ...p, run: this.launcher.status(p.id), extensionIds: links[p.id] ?? [] }));
+    const snaps = this.store.getFingerprintSnapshots();
+    return this.store.listProfiles(filter).map((p) => this.view(p, links, snaps));
   }
 
   getProfile(id: string): ProfileView {
     const profile = typeof id === 'string' ? this.store.getProfile(id) : null;
     if (!profile) throw new Error('Không tìm thấy hồ sơ');
-    return { ...profile, run: this.launcher.status(profile.id), extensionIds: this.store.profileExtensionLinks()[profile.id] ?? [] };
+    return this.view(profile, this.store.profileExtensionLinks(), this.store.getFingerprintSnapshots());
+  }
+
+  /** Đổi seed: GPU, số nhân CPU, RAM, nhiễu canvas/âm thanh… đổi theo. Có hiệu lực từ lần khởi động sau. */
+  regenerateFingerprint(id: string): Profile {
+    if (!this.store.getProfile(id)) throw new Error('Không tìm thấy hồ sơ');
+    this.store.setSeed(id, randomSeed());
+    this.emit('change', id);
+    return this.store.getProfile(id)!;
+  }
+
+  /** Đo những gì trang web thấy từ hồ sơ này. Không đụng dữ liệu hồ sơ, chạy được cả khi hồ sơ đang mở. */
+  measureFingerprint(id: string): Promise<FingerprintSnapshot> {
+    const running = this.measuring.get(id);
+    if (running) return running;
+    const p = this.doMeasure(id);
+    this.measuring.set(id, p);
+    const done = (): void => {
+      this.measuring.delete(id);
+    };
+    p.then(done, done);
+    return p;
+  }
+
+  private async doMeasure(id: string): Promise<FingerprintSnapshot> {
+    const profile = typeof id === 'string' ? this.store.getProfile(id) : null;
+    if (!profile) throw new Error('Không tìm thấy hồ sơ');
+    const exe = this.engine.executablePath();
+    if (!exe) throw new Error('Chưa cài nhân trình duyệt');
+    const engineVersion = this.engine.release().version;
+    const key = fingerprintKey(profile, engineVersion);
+    const r = await this.probe(exe, fingerprintArgs(profile));
+    const snapshot: FingerprintSnapshot = { ...r, measuredAt: Date.now(), engineVersion };
+    // Hồ sơ có thể đã bị sửa hoặc xoá trong lúc đo: chỉ lưu khi tham số vẫn như lúc bắt đầu.
+    const now = this.store.getProfile(id);
+    if (now && fingerprintKey(now, engineVersion) === key) {
+      this.store.saveFingerprintSnapshot(id, key, snapshot);
+      this.emit('change', id);
+    }
+    return snapshot;
   }
 
   private checkProfileRefs(patch: { name?: string; proxyId?: string | null; groupId?: string | null }): void {

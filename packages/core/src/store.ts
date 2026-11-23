@@ -1,13 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { hostDefaults, randomSeed } from './fingerprint';
-import type { Extension, Group, Profile, Proxy } from './types';
+import type { Extension, FingerprintSnapshot, Group, Profile, Proxy } from './types';
 
 export type NewProfile = { name: string } & Partial<
-  Pick<Profile, 'groupId' | 'notes' | 'platform' | 'platformVersion' | 'brand' | 'hardwareConcurrency' | 'lang' | 'acceptLang' | 'timezone' | 'proxyId'>
+  Pick<Profile, 'groupId' | 'notes' | 'platform' | 'platformVersion' | 'brand' | 'hardwareConcurrency' | 'screenWidth' | 'screenHeight' | 'screenScale' | 'lang' | 'acceptLang' | 'timezone' | 'proxyId'>
 >;
 export type ProfilePatch = Partial<
-  Pick<Profile, 'name' | 'groupId' | 'notes' | 'platform' | 'platformVersion' | 'brand' | 'hardwareConcurrency' | 'lang' | 'acceptLang' | 'timezone' | 'proxyId'>
+  Pick<Profile, 'name' | 'groupId' | 'notes' | 'platform' | 'platformVersion' | 'brand' | 'hardwareConcurrency' | 'screenWidth' | 'screenHeight' | 'screenScale' | 'lang' | 'acceptLang' | 'timezone' | 'proxyId'>
 >;
 export type ProfileFilter = { search?: string; groupId?: string | null };
 export type NewProxyRow = Pick<Proxy, 'protocol' | 'host' | 'port' | 'username' | 'passwordEncrypted'>;
@@ -39,11 +39,17 @@ const MIGRATIONS = [
   `CREATE TABLE extension (id TEXT PRIMARY KEY, name TEXT NOT NULL, version TEXT NOT NULL, path TEXT NOT NULL, created_at INTEGER NOT NULL);
    CREATE TABLE profile_extension (profile_id TEXT NOT NULL, extension_id TEXT NOT NULL, PRIMARY KEY (profile_id, extension_id));
    CREATE TABLE group_extension (group_id TEXT NOT NULL, extension_id TEXT NOT NULL, PRIMARY KEY (group_id, extension_id));`,
+  `ALTER TABLE profile ADD COLUMN screen_width INTEGER;
+   ALTER TABLE profile ADD COLUMN screen_height INTEGER;
+   ALTER TABLE profile ADD COLUMN screen_scale REAL;
+   ALTER TABLE profile ADD COLUMN fp_key TEXT;
+   ALTER TABLE profile ADD COLUMN fp_snapshot TEXT;`,
 ];
 
 const PROFILE_COLS: Record<keyof ProfilePatch, string> = {
   name: 'name', groupId: 'group_id', notes: 'notes', platform: 'platform',
   platformVersion: 'platform_version', brand: 'brand', hardwareConcurrency: 'hardware_concurrency',
+  screenWidth: 'screen_width', screenHeight: 'screen_height', screenScale: 'screen_scale',
   lang: 'lang', acceptLang: 'accept_lang', timezone: 'timezone', proxyId: 'proxy_id',
 };
 const PROXY_COLS: Record<keyof NewProxyRow, string> = {
@@ -57,7 +63,9 @@ function toProfile(r: Row): Profile {
     id: r.id as string, name: r.name as string, groupId: r.group_id as string | null, notes: r.notes as string,
     seed: r.seed as number, platform: r.platform as Profile['platform'],
     platformVersion: r.platform_version as string | null, brand: r.brand as string,
-    hardwareConcurrency: r.hardware_concurrency as number | null, lang: r.lang as string,
+    hardwareConcurrency: r.hardware_concurrency as number | null,
+    screenWidth: r.screen_width as number | null, screenHeight: r.screen_height as number | null,
+    screenScale: r.screen_scale as number | null, lang: r.lang as string,
     acceptLang: r.accept_lang as string, timezone: r.timezone as string, proxyId: r.proxy_id as string | null,
     engineVersion: r.engine_version as string | null, createdAt: r.created_at as number,
     lastLaunchedAt: r.last_launched_at as number | null,
@@ -199,17 +207,18 @@ export class ProfileStore {
       id: randomUUID(), name: input.name, groupId: input.groupId ?? null, notes: input.notes ?? '',
       seed: randomSeed(), platform: input.platform ?? d.platform, platformVersion: input.platformVersion ?? null,
       brand: input.brand ?? 'Chrome', hardwareConcurrency: input.hardwareConcurrency ?? null,
+      screenWidth: input.screenWidth ?? null, screenHeight: input.screenHeight ?? null, screenScale: input.screenScale ?? null,
       lang: input.lang ?? d.lang, acceptLang: input.acceptLang ?? d.acceptLang, timezone: input.timezone ?? d.timezone,
       proxyId: input.proxyId ?? null, engineVersion: null, createdAt: Date.now(), lastLaunchedAt: null,
     };
     this.db
       .prepare(
         `INSERT INTO profile (id, name, group_id, notes, seed, platform, platform_version, brand, hardware_concurrency,
-           lang, accept_lang, timezone, proxy_id, engine_version, created_at, last_launched_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           screen_width, screen_height, screen_scale, lang, accept_lang, timezone, proxy_id, engine_version, created_at, last_launched_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(p.id, p.name, p.groupId, p.notes, p.seed, p.platform, p.platformVersion, p.brand, p.hardwareConcurrency,
-        p.lang, p.acceptLang, p.timezone, p.proxyId, p.engineVersion, p.createdAt, p.lastLaunchedAt);
+        p.screenWidth, p.screenHeight, p.screenScale, p.lang, p.acceptLang, p.timezone, p.proxyId, p.engineVersion, p.createdAt, p.lastLaunchedAt);
     return p;
   }
 
@@ -237,6 +246,28 @@ export class ProfileStore {
   updateProfile(id: string, patch: ProfilePatch): Profile {
     this.patch('profile', PROFILE_COLS, id, patch);
     return this.getProfile(id)!;
+  }
+
+  setSeed(id: string, seed: number): void {
+    this.db.prepare('UPDATE profile SET seed = ?, fp_key = NULL, fp_snapshot = NULL WHERE id = ?').run(seed, id);
+  }
+
+  /** Kết quả đo vân tay đã lưu, kèm khoá tham số lúc đo (để biết còn đúng không). */
+  getFingerprintSnapshots(): Record<string, { key: string; snapshot: FingerprintSnapshot }> {
+    const rows = this.db.prepare('SELECT id, fp_key, fp_snapshot FROM profile WHERE fp_snapshot IS NOT NULL').all() as Row[];
+    const out: Record<string, { key: string; snapshot: FingerprintSnapshot }> = {};
+    for (const r of rows) {
+      try {
+        out[r.id as string] = { key: r.fp_key as string, snapshot: JSON.parse(r.fp_snapshot as string) };
+      } catch {
+        // bỏ qua dữ liệu hỏng
+      }
+    }
+    return out;
+  }
+
+  saveFingerprintSnapshot(id: string, key: string, snapshot: FingerprintSnapshot): void {
+    this.db.prepare('UPDATE profile SET fp_key = ?, fp_snapshot = ? WHERE id = ?').run(key, JSON.stringify(snapshot), id);
   }
 
   deleteProfile(id: string): void {

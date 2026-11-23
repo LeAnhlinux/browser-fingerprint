@@ -11,6 +11,11 @@ export interface Profile {
   platformVersion: string | null;
   brand: string;
   hardwareConcurrency: number | null;
+  /** Độ phân giải màn hình giả (điểm CSS). null: trang web thấy màn hình thật. */
+  screenWidth: number | null;
+  screenHeight: number | null;
+  /** Tỉ lệ điểm ảnh (devicePixelRatio) khi giả màn hình. */
+  screenScale: number | null;
   lang: string;
   acceptLang: string;
   timezone: string;
@@ -18,6 +23,20 @@ export interface Profile {
   engineVersion: string | null;
   createdAt: number;
   lastLaunchedAt: number | null;
+}
+
+/** Những gì trang web đọc được từ hồ sơ, đo bằng cách mở thử nhân với đúng tham số của hồ sơ. */
+export interface FingerprintSnapshot {
+  measuredAt: number;
+  engineVersion: string;
+  userAgent: string;
+  platform: string;
+  cores: number | null;
+  memory: number | null;
+  gpuVendor: string | null;
+  gpuRenderer: string | null;
+  languages: string[];
+  timezone: string;
 }
 
 export interface Group {
