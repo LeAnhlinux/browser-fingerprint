@@ -8,3 +8,4 @@ export * from './core';
 export * from './proxy-parse';
 export * from './proxy-checker';
 export * from './locale';
+export * from './cdp';
