@@ -34,10 +34,24 @@ Nếu proxy bị sửa trong lúc đang kiểm tra, lần kiểm tra đó thất
 
 Khi dán danh sách proxy, dòng bắt đầu bằng `#` được coi là chú thích và bị bỏ qua; dòng dài hơn 2048 ký tự bị từ chối. Nếu dịch vụ tra IP trả HTTP 429 (giới hạn tốc độ), app báo đúng như vậy và không ghi đè kết quả kiểm tra trước đó của proxy.
 
+## Cookie và extension
+
+**Nhập cookie.** Bấm nút "Cookie" trên dòng hồ sơ, rồi dán JSON (kiểu xuất của các extension quản lý cookie) hoặc nội dung Netscape `cookies.txt`, hoặc chọn file. Giới hạn 5 MB và 10.000 cookie mỗi lần nhập.
+
+Nếu hồ sơ chưa chạy, app tự mở ẩn hồ sơ qua đúng proxy của nó, nhập xong rồi đóng lại. Proxy chết thì app báo lỗi chứ không bao giờ mở trực tiếp không qua proxy. Cookie phiên (không có hạn) chỉ nhập được khi hồ sơ đang chạy, vì đóng nhân là mất; khi hồ sơ chưa chạy, các cookie này bị bỏ qua và được báo trong kết quả.
+
+**Xuất cookie.** Ra một file JSON, bạn tự chọn chỗ lưu. File này chứa phiên đăng nhập, ai có file là vào được tài khoản: hãy giữ như giữ mật khẩu.
+
+**Extension.** Thêm từ thư mục đã giải nén hoặc từ file `.crx` / `.zip` trong "Nhóm, proxy, extension". Gán theo nhóm ngay tại đó, gán riêng cho từng hồ sơ trong form hồ sơ. Thay đổi có hiệu lực từ lần khởi động hồ sơ sau.
+
+App sao chép extension vào thư mục dữ liệu của mình và không kiểm tra chữ ký của file `.crx`, nên chỉ thêm extension từ nguồn bạn tin. File `.crx` giữ nguyên ID gốc của extension, vì vậy dữ liệu (ví dụ ví tiền mã hoá) gắn theo ID không bị đổi.
+
+Giới hạn: chưa tải extension thẳng từ Chrome Web Store, chưa tự cập nhật extension, chưa thử trên Windows.
+
 ## Giới hạn đã biết
 
 - Nhân là bản dựng của bên thứ ba, mã nguồn bản vá được công bố chậm khoảng một tháng. Không dùng các hồ sơ này cho ví tiền mã hoá giá trị cao.
 - Chưa có bộ cài đặt (installer).
-- Giai đoạn 2 (tạo hồ sơ hàng loạt, nhập danh sách proxy, kiểm tra proxy, múi giờ và ngôn ngữ theo proxy) đã xây dựng xong; giai đoạn 3 và 4 chưa được xây dựng.
+- Giai đoạn 2 (tạo hồ sơ hàng loạt, nhập danh sách proxy, kiểm tra proxy, múi giờ và ngôn ngữ theo proxy) đã xây dựng xong. Giai đoạn 3 (nhập và xuất cookie, thư viện extension gán theo nhóm hoặc theo hồ sơ) cũng đã xong; còn giai đoạn 4 chưa được xây dựng.
 
 Việc tuân thủ điều khoản dịch vụ của từng nền tảng là trách nhiệm của người dùng.
