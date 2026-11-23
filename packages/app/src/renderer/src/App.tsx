@@ -1,4 +1,4 @@
-import type { CoreInfo, Group, NewProfile, ProfileView, ProxyView } from '@bf/core'
+import type { CoreInfo, Extension, Group, ProfileInput, ProfileView, ProxyView } from '@bf/core'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { BulkBar } from './BulkBar'
 import { BulkCreateForm } from './BulkCreateForm'
@@ -14,6 +14,8 @@ export default function App(): React.JSX.Element {
   const [profiles, setProfiles] = useState<ProfileView[]>([])
   const [groups, setGroups] = useState<Group[]>([])
   const [proxies, setProxies] = useState<ProxyView[]>([])
+  const [extensions, setExtensions] = useState<Extension[]>([])
+  const [groupExtensions, setGroupExtensions] = useState<Record<string, string[]>>({})
   const [search, setSearch] = useState('')
   const [groupFilter, setGroupFilter] = useState('all')
   const [editing, setEditing] = useState<ProfileView | 'new' | null>(null)
@@ -31,11 +33,13 @@ export default function App(): React.JSX.Element {
       ...(groupFilter === 'all' ? {} : { groupId: groupFilter === 'none' ? null : groupFilter })
     }
     try {
-      const [i, p, g, x] = await Promise.all([
+      const [i, p, g, x, e, ge] = await Promise.all([
         api.info(),
         api.listProfiles(filter),
         api.listGroups(),
-        api.listProxies()
+        api.listProxies(),
+        api.listExtensions(),
+        api.listGroupExtensions()
       ])
       setInfo(i)
       setProfiles(p)
@@ -46,6 +50,8 @@ export default function App(): React.JSX.Element {
       })
       setGroups(g)
       setProxies(x)
+      setExtensions(e)
+      setGroupExtensions(ge)
       if (
         groupFilter !== 'all' &&
         groupFilter !== 'none' &&
@@ -98,7 +104,7 @@ export default function App(): React.JSX.Element {
   }
   if (!info.engineInstalled) return <EngineGate info={info} onInstalled={() => void reload()} />
 
-  const save = async (input: NewProfile): Promise<void> => {
+  const save = async (input: ProfileInput): Promise<void> => {
     if (savingRef.current) return
     savingRef.current = true
     const target = editing
@@ -150,7 +156,7 @@ export default function App(): React.JSX.Element {
             setShowSettings(true)
           }}
         >
-          Nhóm và proxy
+          Nhóm, proxy, extension
         </button>
         <button
           onClick={() => {
@@ -222,6 +228,8 @@ export default function App(): React.JSX.Element {
           profile={editing === 'new' ? null : editing}
           groups={groups}
           proxies={proxies}
+          extensions={extensions}
+          groupExtensions={groupExtensions}
           hostPlatform={info.hostPlatform}
           onSave={(input) => void save(input)}
           error={error}
@@ -248,6 +256,8 @@ export default function App(): React.JSX.Element {
         <SettingsPanel
           groups={groups}
           proxies={proxies}
+          extensions={extensions}
+          groupExtensions={groupExtensions}
           run={run}
           error={error}
           onClose={() => {

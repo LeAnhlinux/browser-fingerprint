@@ -1,17 +1,28 @@
-import type { Group, ProxyProtocol, ProxyView } from '@bf/core'
+import type { Extension, Group, ProxyProtocol, ProxyView } from '@bf/core'
 import { useState } from 'react'
 import { api, cleanError } from './api'
+import { ExtensionsPanel } from './ExtensionsPanel'
 import { ProxyImport } from './ProxyImport'
 
 interface Props {
   groups: Group[]
   proxies: ProxyView[]
+  extensions: Extension[]
+  groupExtensions: Record<string, string[]>
   run: (fn: () => Promise<unknown>) => Promise<boolean>
   error: string
   onClose: () => void
 }
 
-export function SettingsPanel({ groups, proxies, run, error, onClose }: Props): React.JSX.Element {
+export function SettingsPanel({
+  groups,
+  proxies,
+  extensions,
+  groupExtensions,
+  run,
+  error,
+  onClose
+}: Props): React.JSX.Element {
   const [groupName, setGroupName] = useState('')
   const [protocol, setProtocol] = useState<ProxyProtocol>('http')
   const [host, setHost] = useState('')
@@ -229,6 +240,12 @@ export function SettingsPanel({ groups, proxies, run, error, onClose }: Props): 
 
         <h2 style={{ marginTop: 22 }}>Nhập nhiều proxy</h2>
         <ProxyImport run={run} />
+
+        <ExtensionsPanel
+          extensions={extensions}
+          groups={groups}
+          groupExtensions={groupExtensions}
+        />
 
         <div className="dialog-actions">
           <button onClick={onClose}>Đóng</button>

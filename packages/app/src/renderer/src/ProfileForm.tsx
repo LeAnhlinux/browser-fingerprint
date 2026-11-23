@@ -1,14 +1,16 @@
-import type { Group, NewProfile, Platform, ProfileView, ProxyView } from '@bf/core'
+import type { Extension, Group, Platform, ProfileInput, ProfileView, ProxyView } from '@bf/core'
 import { useState } from 'react'
 
 interface Props {
   profile: ProfileView | null
   groups: Group[]
   proxies: ProxyView[]
+  extensions: Extension[]
+  groupExtensions: Record<string, string[]>
   hostPlatform: Platform
   error: string
   saving: boolean
-  onSave: (input: NewProfile) => void
+  onSave: (input: ProfileInput) => void
   onCancel: () => void
 }
 
@@ -16,6 +18,8 @@ export function ProfileForm({
   profile,
   groups,
   proxies,
+  extensions,
+  groupExtensions,
   hostPlatform,
   error,
   saving,
@@ -38,6 +42,7 @@ export function ProfileForm({
     profile?.hardwareConcurrency ? String(profile.hardwareConcurrency) : ''
   )
   const [notes, setNotes] = useState(profile?.notes ?? '')
+  const [extIds, setExtIds] = useState<Set<string>>(new Set(profile?.extensionIds ?? []))
 
   const submit = (): void => {
     onSave({
@@ -49,7 +54,8 @@ export function ProfileForm({
       acceptLang: acceptLang.trim(),
       timezone: timezone.trim(),
       hardwareConcurrency: cores ? Number(cores) : null,
-      notes
+      notes,
+      extensionIds: extensions.filter((x) => extIds.has(x.id)).map((x) => x.id)
     })
   }
 
@@ -142,6 +148,35 @@ export function ProfileForm({
             placeholder="America/New_York"
           />
         </div>
+        {extensions.length > 0 && (
+          <div className="field">
+            <label>Extension (có hiệu lực từ lần khởi động sau)</label>
+            <div className="check-list">
+              {extensions.map((ext) => {
+                const fromGroup = (groupExtensions[groupId] ?? []).includes(ext.id)
+                return (
+                  <label key={ext.id}>
+                    <input
+                      type="checkbox"
+                      disabled={fromGroup}
+                      checked={fromGroup || extIds.has(ext.id)}
+                      onChange={(e) =>
+                        setExtIds((prev) => {
+                          const next = new Set(prev)
+                          if (e.target.checked) next.add(ext.id)
+                          else next.delete(ext.id)
+                          return next
+                        })
+                      }
+                    />
+                    {ext.name}
+                    {fromGroup && <span className="muted"> (từ nhóm)</span>}
+                  </label>
+                )
+              })}
+            </div>
+          </div>
+        )}
         <div className="field">
           <label>Ghi chú</label>
           <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
