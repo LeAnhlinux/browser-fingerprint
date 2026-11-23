@@ -1,6 +1,7 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { hostDefaults } from '../src/fingerprint';
 import { ProfileStore } from '../src/store';
@@ -100,6 +101,50 @@ describe('ProfileStore', () => {
     const b = new ProfileStore(file);
     expect(b.getProfile(p.id)).toEqual(p);
     b.close();
+  });
+
+  it('proxy mới chưa có kết quả kiểm tra', () => {
+    const x = store.createProxy({ protocol: 'http', host: 'h', port: 1, username: null, passwordEncrypted: null });
+    expect(x).toMatchObject({ lastCheckedAt: null, lastStatus: null, lastIp: null, lastCountry: null, lastTimezone: null, lastError: null });
+    expect(store.getProxy(x.id)).toEqual(x);
+  });
+
+  it('saveProxyCheck ghi kết quả; clearProxyCheck xoá', () => {
+    const x = store.createProxy({ protocol: 'http', host: 'h', port: 1, username: null, passwordEncrypted: null });
+    store.saveProxyCheck(x.id, { ok: true, ip: '203.0.113.7', country: 'US', timezone: 'America/Chicago', error: null });
+    const ok = store.getProxy(x.id)!;
+    expect(ok).toMatchObject({ lastStatus: 'ok', lastIp: '203.0.113.7', lastCountry: 'US', lastTimezone: 'America/Chicago', lastError: null });
+    expect(ok.lastCheckedAt).toBeGreaterThan(0);
+    store.saveProxyCheck(x.id, { ok: false, ip: null, country: null, timezone: null, error: 'Hết thời gian' });
+    expect(store.getProxy(x.id)).toMatchObject({ lastStatus: 'fail', lastIp: null, lastError: 'Hết thời gian' });
+    store.clearProxyCheck(x.id);
+    expect(store.getProxy(x.id)).toMatchObject({ lastCheckedAt: null, lastStatus: null, lastError: null });
+  });
+
+  it('nâng cấp DB của giai đoạn 1 mà không mất dữ liệu', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'bf-mig-')), 'db.sqlite');
+    const old = new DatabaseSync(file);
+    old.exec(`CREATE TABLE grp (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+      CREATE TABLE proxy (id TEXT PRIMARY KEY, protocol TEXT NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL, username TEXT, password_encrypted TEXT);
+      CREATE TABLE profile (id TEXT PRIMARY KEY, name TEXT NOT NULL, group_id TEXT, notes TEXT NOT NULL DEFAULT '', seed INTEGER NOT NULL,
+        platform TEXT NOT NULL, platform_version TEXT, brand TEXT NOT NULL, hardware_concurrency INTEGER, lang TEXT NOT NULL,
+        accept_lang TEXT NOT NULL, timezone TEXT NOT NULL, proxy_id TEXT, engine_version TEXT, created_at INTEGER NOT NULL, last_launched_at INTEGER);
+      INSERT INTO proxy VALUES ('x1', 'socks5', '9.9.9.9', 1080, 'u', 'enc');
+      PRAGMA user_version = 1;`);
+    old.close();
+    const upgraded = new ProfileStore(file);
+    expect(upgraded.getProxy('x1')).toMatchObject({ host: '9.9.9.9', passwordEncrypted: 'enc', lastStatus: null });
+    upgraded.close();
+  });
+
+  it('transaction: ROLLBACK lỗi thì vẫn ném lỗi gốc', () => {
+    const db = (store as unknown as { db: DatabaseSync }).db;
+    expect(() =>
+      store.transaction(() => {
+        db.exec('ROLLBACK'); // SQLite đã đóng transaction, ROLLBACK sau đó sẽ lỗi "no transaction is active"
+        throw new Error('lỗi gốc');
+      }),
+    ).toThrow('lỗi gốc');
   });
 
   it('transaction: lỗi giữa chừng thì không ghi gì', () => {

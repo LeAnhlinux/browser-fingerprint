@@ -4,7 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { EngineManager, type EngineOptions } from './engine';
 import { hostPlatform } from './fingerprint';
 import { Launcher, type LauncherDeps, type RunInfo } from './launcher';
-import { type NewProfile, type ProfileFilter, type ProfilePatch, ProfileStore } from './store';
+import { type NewProfile, type ProfileFilter, type ProfilePatch, ProfileStore, type ProxyRowPatch } from './store';
 import type { Group, Platform, Profile, Proxy, ProxyProtocol, SecretBox } from './types';
 
 export type ProfileView = Profile & { run: RunInfo | null };
@@ -187,7 +187,7 @@ export class Core extends EventEmitter {
     const current = this.store.getProxy(id);
     if (!current) throw new Error('Không tìm thấy proxy');
     // Danh sách trường cho phép: không bao giờ trải nguyên đối tượng của người gọi vào DB.
-    const dbPatch: Partial<Omit<Proxy, 'id'>> = {};
+    const dbPatch: ProxyRowPatch = {};
     if (patch.protocol !== undefined) dbPatch.protocol = checkProtocol(patch.protocol);
     if (patch.host !== undefined) dbPatch.host = normalizeHost(patch.host);
     if (patch.port !== undefined) dbPatch.port = checkPort(patch.port);
@@ -198,7 +198,10 @@ export class Core extends EventEmitter {
     const username = 'username' in dbPatch ? dbPatch.username : current.username;
     const passwordEncrypted = 'passwordEncrypted' in dbPatch ? dbPatch.passwordEncrypted : current.passwordEncrypted;
     if (passwordEncrypted && !username) throw new Error('Cần tài khoản khi có mật khẩu');
-    return toProxyView(this.store.updateProxy(id, dbPatch));
+    const updated = this.store.updateProxy(id, dbPatch);
+    if (Object.keys(dbPatch).length === 0) return toProxyView(updated);
+    this.store.clearProxyCheck(id);
+    return toProxyView(this.store.getProxy(id)!);
   }
 
   deleteProxy(id: string): void {

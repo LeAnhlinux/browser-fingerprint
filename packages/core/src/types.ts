@@ -32,6 +32,12 @@ export interface Proxy {
   port: number;
   username: string | null;
   passwordEncrypted: string | null;
+  lastCheckedAt: number | null;
+  lastStatus: 'ok' | 'fail' | null;
+  lastIp: string | null;
+  lastCountry: string | null;
+  lastTimezone: string | null;
+  lastError: string | null;
 }
 
 export interface SecretBox {

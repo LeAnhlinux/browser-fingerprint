@@ -42,6 +42,14 @@ beforeEach(async () => {
 });
 
 describe('Core', () => {
+  it('sửa thông tin kết nối của proxy thì xoá kết quả kiểm tra cũ; chỉ đọc thì giữ', () => {
+    const x = core.createProxy({ protocol: 'http', host: 'h', port: 1 });
+    core.store.saveProxyCheck(x.id, { ok: true, ip: '203.0.113.7', country: 'US', timezone: 'America/Chicago', error: null });
+    expect(core.listProxies()[0].lastStatus).toBe('ok');
+    expect(core.updateProxy(x.id, {}).lastStatus).toBe('ok');
+    expect(core.updateProxy(x.id, { port: 2 }).lastStatus).toBeNull();
+  });
+
   it('info báo trạng thái nhân và hệ điều hành máy', () => {
     const info = core.info();
     expect(info.engineInstalled).toBe(false);
@@ -51,7 +59,8 @@ describe('Core', () => {
 
   it('mật khẩu proxy được mã hoá khi lưu và không lộ ra ngoài', () => {
     const x = core.createProxy({ protocol: 'http', host: 'h', port: 1, username: 'u', password: 'secret' });
-    expect(x).toEqual({ id: x.id, protocol: 'http', host: 'h', port: 1, username: 'u', hasPassword: true });
+    expect(x).toEqual({ id: x.id, protocol: 'http', host: 'h', port: 1, username: 'u', hasPassword: true,
+      lastCheckedAt: null, lastStatus: null, lastIp: null, lastCountry: null, lastTimezone: null, lastError: null });
     expect(JSON.stringify(core.listProxies())).not.toContain('secret');
     expect(core.store.getProxy(x.id)!.passwordEncrypted).toBe('enc:secret');
   });

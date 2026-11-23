@@ -10,6 +10,15 @@ export type ProfilePatch = Partial<
   Pick<Profile, 'name' | 'groupId' | 'notes' | 'platform' | 'platformVersion' | 'brand' | 'hardwareConcurrency' | 'lang' | 'acceptLang' | 'timezone' | 'proxyId'>
 >;
 export type ProfileFilter = { search?: string; groupId?: string | null };
+export type NewProxyRow = Pick<Proxy, 'protocol' | 'host' | 'port' | 'username' | 'passwordEncrypted'>;
+export type ProxyRowPatch = Partial<NewProxyRow>;
+export interface ProxyCheckRecord {
+  ok: boolean;
+  ip: string | null;
+  country: string | null;
+  timezone: string | null;
+  error: string | null;
+}
 
 const MIGRATIONS = [
   `CREATE TABLE grp (id TEXT PRIMARY KEY, name TEXT NOT NULL);
@@ -21,6 +30,12 @@ const MIGRATIONS = [
      seed INTEGER NOT NULL, platform TEXT NOT NULL, platform_version TEXT, brand TEXT NOT NULL,
      hardware_concurrency INTEGER, lang TEXT NOT NULL, accept_lang TEXT NOT NULL, timezone TEXT NOT NULL,
      proxy_id TEXT, engine_version TEXT, created_at INTEGER NOT NULL, last_launched_at INTEGER);`,
+  `ALTER TABLE proxy ADD COLUMN last_checked_at INTEGER;
+   ALTER TABLE proxy ADD COLUMN last_status TEXT;
+   ALTER TABLE proxy ADD COLUMN last_ip TEXT;
+   ALTER TABLE proxy ADD COLUMN last_country TEXT;
+   ALTER TABLE proxy ADD COLUMN last_timezone TEXT;
+   ALTER TABLE proxy ADD COLUMN last_error TEXT;`,
 ];
 
 const PROFILE_COLS: Record<keyof ProfilePatch, string> = {
@@ -28,7 +43,7 @@ const PROFILE_COLS: Record<keyof ProfilePatch, string> = {
   platformVersion: 'platform_version', brand: 'brand', hardwareConcurrency: 'hardware_concurrency',
   lang: 'lang', acceptLang: 'accept_lang', timezone: 'timezone', proxyId: 'proxy_id',
 };
-const PROXY_COLS: Record<keyof Omit<Proxy, 'id'>, string> = {
+const PROXY_COLS: Record<keyof NewProxyRow, string> = {
   protocol: 'protocol', host: 'host', port: 'port', username: 'username', passwordEncrypted: 'password_encrypted',
 };
 
@@ -50,6 +65,9 @@ function toProxy(r: Row): Proxy {
   return {
     id: r.id as string, protocol: r.protocol as Proxy['protocol'], host: r.host as string, port: r.port as number,
     username: r.username as string | null, passwordEncrypted: r.password_encrypted as string | null,
+    lastCheckedAt: r.last_checked_at as number | null, lastStatus: r.last_status as Proxy['lastStatus'],
+    lastIp: r.last_ip as string | null, lastCountry: r.last_country as string | null,
+    lastTimezone: r.last_timezone as string | null, lastError: r.last_error as string | null,
   };
 }
 
@@ -79,7 +97,11 @@ export class ProfileStore {
       this.db.exec('COMMIT');
       return result;
     } catch (err) {
-      this.db.exec('ROLLBACK');
+      try {
+        this.db.exec('ROLLBACK');
+      } catch {
+        // SQLite có thể đã tự rollback; không để lỗi ROLLBACK che lỗi gốc.
+      }
       throw err;
     }
   }
@@ -115,12 +137,12 @@ export class ProfileStore {
     });
   }
 
-  createProxy(input: Omit<Proxy, 'id'>): Proxy {
-    const x: Proxy = { id: randomUUID(), ...input };
+  createProxy(input: NewProxyRow): Proxy {
+    const id = randomUUID();
     this.db
       .prepare('INSERT INTO proxy (id, protocol, host, port, username, password_encrypted) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(x.id, x.protocol, x.host, x.port, x.username, x.passwordEncrypted);
-    return x;
+      .run(id, input.protocol, input.host, input.port, input.username, input.passwordEncrypted);
+    return this.getProxy(id)!;
   }
 
   getProxy(id: string): Proxy | null {
@@ -132,9 +154,21 @@ export class ProfileStore {
     return (this.db.prepare('SELECT * FROM proxy ORDER BY host, port').all() as Row[]).map(toProxy);
   }
 
-  updateProxy(id: string, patch: Partial<Omit<Proxy, 'id'>>): Proxy {
+  updateProxy(id: string, patch: ProxyRowPatch): Proxy {
     this.patch('proxy', PROXY_COLS, id, patch);
     return this.getProxy(id)!;
+  }
+
+  saveProxyCheck(id: string, r: ProxyCheckRecord): void {
+    this.db
+      .prepare('UPDATE proxy SET last_checked_at = ?, last_status = ?, last_ip = ?, last_country = ?, last_timezone = ?, last_error = ? WHERE id = ?')
+      .run(Date.now(), r.ok ? 'ok' : 'fail', r.ip, r.country, r.timezone, r.error, id);
+  }
+
+  clearProxyCheck(id: string): void {
+    this.db
+      .prepare('UPDATE proxy SET last_checked_at = NULL, last_status = NULL, last_ip = NULL, last_country = NULL, last_timezone = NULL, last_error = NULL WHERE id = ?')
+      .run(id);
   }
 
   deleteProxy(id: string): void {
