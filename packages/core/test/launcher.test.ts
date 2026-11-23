@@ -288,4 +288,30 @@ describe('Launcher', () => {
     expect(sp.calls[1].args).not.toContain('--headless=new');
     expect(again.headless).toBe(false);
   });
+
+  it('nạp extension bằng --load-extension; không có extension thì không thêm cờ', async () => {
+    const a = store.createProfile({ name: 'a' });
+    const b = store.createProfile({ name: 'b' });
+    const l = new Launcher({ ...deps, extensionDirs: (id) => (id === a.id ? ['/data/extensions/e1', '/data/extensions/e2'] : []) });
+    await l.launch(a.id);
+    await l.launch(b.id);
+    expect(sp.calls[0].args).toContain('--load-extension=/data/extensions/e1,/data/extensions/e2');
+    expect(sp.calls[1].args.some((x) => x.startsWith('--load-extension'))).toBe(false);
+  });
+
+  it('đường dẫn extension có dấu phẩy: từ chối trước khi chạy nhân', async () => {
+    const p = store.createProfile({ name: 'a' });
+    const l = new Launcher({ ...deps, extensionDirs: () => ['/data/a,b/e1'] });
+    await expect(l.launch(p.id)).rejects.toThrow(LaunchError);
+    expect(sp.calls).toHaveLength(0);
+    expect(l.isActive(p.id)).toBe(false);
+  });
+
+  it('lỗi khi lấy danh sách extension làm hỏng lần khởi chạy và không để sót trạng thái', async () => {
+    const p = store.createProfile({ name: 'a' });
+    const l = new Launcher({ ...deps, extensionDirs: () => { throw new LaunchError('Thiếu file của extension'); } });
+    await expect(l.launch(p.id)).rejects.toThrow('Thiếu file của extension');
+    expect(sp.calls).toHaveLength(0);
+    expect(l.isActive(p.id)).toBe(false);
+  });
 });

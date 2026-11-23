@@ -1,19 +1,24 @@
 import { EventEmitter } from 'node:events';
-import { mkdirSync, rmSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { CdpError, type CdpSession, openCdp } from './cdp';
 import { type CdpCookie, type CookieParam, cookieKey, parseCookies, toExportCookies } from './cookie-parse';
 import { EngineManager, type EngineOptions } from './engine';
+import { installExtensionFiles } from './extension-files';
 import { hostPlatform } from './fingerprint';
-import { Launcher, type LauncherDeps, type RunInfo } from './launcher';
+import { LaunchError, Launcher, type LauncherDeps, type RunInfo } from './launcher';
 import { localeForCountry } from './locale';
 import type { Upstream } from './proxy-bridge';
 import { RATE_LIMITED, type ProxyCheckResult, checkProxy as runProxyCheck, validTimezone } from './proxy-checker';
 import { parseProxyList } from './proxy-parse';
 import { type NewProfile, type NewProxyRow, type ProfileFilter, type ProfilePatch, ProfileStore, type ProxyRowPatch } from './store';
-import type { Group, Platform, Profile, Proxy, ProxyProtocol, SecretBox } from './types';
+import type { Extension, Group, Platform, Profile, Proxy, ProxyProtocol, SecretBox } from './types';
 
-export type ProfileView = Profile & { run: RunInfo | null };
+export type ProfileView = Profile & { run: RunInfo | null; extensionIds: string[] };
+export type ProfileInput = NewProfile & { extensionIds?: string[] };
+export type ProfileUpdate = ProfilePatch & { extensionIds?: string[] };
 export type ProxyView = Omit<Proxy, 'passwordEncrypted'> & { hasPassword: boolean };
 export type NewProxy = { protocol: ProxyProtocol; host: string; port: number; username?: string | null; password?: string | null };
 export type ProxyPatch = Partial<NewProxy>;
@@ -135,6 +140,7 @@ const MAX_IMPORT_CHARS = 1_000_000;
 const MAX_IMPORT_LINES = 5000;
 const MAX_CHECK_IDS = 1000;
 const MAX_COOKIE_CHARS = 5_000_000;
+const MAX_EXTENSIONS_PER_OWNER = 100;
 const COOKIE_CHUNK = 500;
 
 function proxyKey(p: { protocol: string; host: string; port: number; username: string | null }): string {
@@ -151,6 +157,7 @@ export class Core extends EventEmitter {
   readonly engine: EngineManager;
   readonly launcher: Launcher;
   private profilesDir: string;
+  private extensionsDir: string;
   private secrets: SecretBox;
   private proxyCheck: (u: Upstream) => Promise<ProxyCheckResult>;
   private cdpConnect: (cdpUrl: string) => Promise<CdpSession>;
@@ -161,6 +168,8 @@ export class Core extends EventEmitter {
     mkdirSync(opts.dataDir, { recursive: true });
     this.profilesDir = join(opts.dataDir, 'profiles');
     mkdirSync(this.profilesDir, { recursive: true });
+    this.extensionsDir = join(opts.dataDir, 'extensions');
+    mkdirSync(this.extensionsDir, { recursive: true });
     this.secrets = opts.secrets;
     this.proxyCheck = opts.proxyCheck ?? ((u) => runProxyCheck(u, { lookupUrl: opts.lookupUrl }));
     this.cdpConnect = opts.cdpConnect ?? ((url) => openCdp(url));
@@ -171,6 +180,7 @@ export class Core extends EventEmitter {
       engine: this.engine,
       profilesDir: this.profilesDir,
       secrets: this.secrets,
+      extensionDirs: (id) => this.extensionDirsFor(id),
       ...opts.launcherOverrides,
     });
     this.launcher.on('change', (id: string) => this.emit('change', id));
@@ -201,7 +211,8 @@ export class Core extends EventEmitter {
   }
 
   listProfiles(filter: ProfileFilter = {}): ProfileView[] {
-    return this.store.listProfiles(filter).map((p) => ({ ...p, run: this.launcher.status(p.id) }));
+    const links = this.store.profileExtensionLinks();
+    return this.store.listProfiles(filter).map((p) => ({ ...p, run: this.launcher.status(p.id), extensionIds: links[p.id] ?? [] }));
   }
 
   private checkProfileRefs(patch: { name?: string; proxyId?: string | null; groupId?: string | null }): void {
@@ -217,19 +228,38 @@ export class Core extends EventEmitter {
     return n;
   }
 
-  createProfile(input: NewProfile): Profile {
-    const clean = normalizeLocaleFields(normalizeRefs(input));
-    const name = this.cleanName(clean.name);
-    this.checkProfileRefs(clean);
-    return this.store.createProfile({ ...clean, name });
+  private checkExtensionIds(ids: unknown): string[] {
+    if (!Array.isArray(ids) || !ids.every((x) => typeof x === 'string')) throw new Error('Danh sách extension không hợp lệ');
+    if (ids.length > MAX_EXTENSIONS_PER_OWNER) throw new Error(`Tối đa ${MAX_EXTENSIONS_PER_OWNER} extension`);
+    const unique = [...new Set(ids as string[])];
+    if (!unique.every((x) => this.store.getExtension(x))) throw new Error('Không tìm thấy extension');
+    return unique;
   }
 
-  updateProfile(id: string, patch: ProfilePatch): Profile {
+  createProfile(input: ProfileInput): Profile {
+    const { extensionIds, ...rest } = input;
+    const exts = extensionIds === undefined ? null : this.checkExtensionIds(extensionIds);
+    const clean = normalizeLocaleFields(normalizeRefs(rest));
+    const name = this.cleanName(clean.name);
+    this.checkProfileRefs(clean);
+    return this.store.transaction(() => {
+      const profile = this.store.createProfile({ ...clean, name });
+      if (exts) this.store.setProfileExtensions(profile.id, exts);
+      return profile;
+    });
+  }
+
+  updateProfile(id: string, patch: ProfileUpdate): Profile {
     if (!this.store.getProfile(id)) throw new Error('Không tìm thấy hồ sơ');
-    const next = normalizeLocaleFields(normalizeRefs(patch));
+    const { extensionIds, ...rest } = patch;
+    const exts = extensionIds === undefined ? null : this.checkExtensionIds(extensionIds);
+    const next = normalizeLocaleFields(normalizeRefs(rest));
     if (next.name !== undefined) next.name = this.cleanName(next.name);
     this.checkProfileRefs(next);
-    return this.store.updateProfile(id, next);
+    return this.store.transaction(() => {
+      if (exts) this.store.setProfileExtensions(id, exts);
+      return this.store.updateProfile(id, next);
+    });
   }
 
   deleteProfile(id: string): void {
@@ -481,6 +511,71 @@ export class Core extends EventEmitter {
    * Chạy fn với một kết nối CDP tới hồ sơ. Hồ sơ chưa chạy thì mở ẩn qua Launcher (vẫn qua cầu proxy)
    * và luôn dừng lại sau đó, kể cả khi fn lỗi.
    */
+  private extensionDirsFor(profileId: string): string[] {
+    return this.store.extensionsForProfile(profileId).map((e) => {
+      // Luôn tính đường dẫn từ mã extension, không tin cột path trong DB.
+      const dir = join(this.extensionsDir, e.id);
+      if (!existsSync(join(dir, 'manifest.json'))) {
+        throw new LaunchError(`Thiếu file của extension "${e.name}". Hãy xoá rồi thêm lại extension này.`);
+      }
+      return dir;
+    });
+  }
+
+  listExtensions(): Extension[] {
+    return this.store.listExtensions();
+  }
+
+  /** Chỉ gọi từ tiến trình main sau hộp thoại chọn file; không đưa vào danh sách IPC cho phép. */
+  async addExtension(sourcePath: string): Promise<Extension> {
+    if (typeof sourcePath !== 'string' || sourcePath === '') throw new Error(BAD_ARGS);
+    if (this.extensionsDir.includes(',')) throw new Error('Thư mục dữ liệu của ứng dụng chứa dấu phẩy nên không nạp được extension');
+    const id = randomUUID();
+    const dir = join(this.extensionsDir, id);
+    try {
+      const meta = await installExtensionFiles(sourcePath, dir);
+      const ext = this.store.createExtension({ id, name: meta.name, version: meta.version, path: dir });
+      this.emit('change', '');
+      return ext;
+    } catch (err) {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+      throw err;
+    }
+  }
+
+  deleteExtension(id: string): void {
+    if (typeof id !== 'string' || !this.store.getExtension(id)) throw new Error('Không tìm thấy extension');
+    const users = this.store
+      .listProfiles()
+      .filter((p) => this.launcher.isActive(p.id) && this.store.extensionsForProfile(p.id).some((e) => e.id === id));
+    if (users.length > 0) {
+      throw new Error(`Extension đang được dùng bởi hồ sơ đang chạy: ${users.map((p) => p.name).join(', ')}. Hãy dừng các hồ sơ đó trước.`);
+    }
+    const dir = resolve(this.extensionsDir, id);
+    if (dirname(dir) !== resolve(this.extensionsDir)) throw new Error('Mã extension không hợp lệ');
+    this.store.deleteExtension(id);
+    rmSync(dir, { recursive: true, force: true });
+    this.emit('change', '');
+  }
+
+  setProfileExtensions(profileId: string, extensionIds: string[]): void {
+    if (typeof profileId !== 'string' || !this.store.getProfile(profileId)) throw new Error('Không tìm thấy hồ sơ');
+    const exts = this.checkExtensionIds(extensionIds);
+    this.store.transaction(() => this.store.setProfileExtensions(profileId, exts));
+    this.emit('change', profileId);
+  }
+
+  setGroupExtensions(groupId: string, extensionIds: string[]): void {
+    if (typeof groupId !== 'string' || !this.store.listGroups().some((g) => g.id === groupId)) throw new Error('Không tìm thấy nhóm');
+    const exts = this.checkExtensionIds(extensionIds);
+    this.store.transaction(() => this.store.setGroupExtensions(groupId, exts));
+    this.emit('change', '');
+  }
+
+  listGroupExtensions(): Record<string, string[]> {
+    return this.store.groupExtensionLinks();
+  }
+
   private async withBrowser<T>(id: string, fn: (cdp: CdpSession, temporary: boolean) => Promise<T>): Promise<T> {
     if (typeof id !== 'string' || !this.store.getProfile(id)) throw new Error('Không tìm thấy hồ sơ');
     if (this.cookieBusy.has(id)) throw new Error('Hồ sơ đang có thao tác cookie khác, hãy chờ xong');

@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { hostDefaults } from '../src/fingerprint';
 import { ProfileStore } from '../src/store';
 
-const MIGRATION_COUNT = 2;
+const MIGRATION_COUNT = 3;
 let store: ProfileStore;
 beforeEach(() => { store = new ProfileStore(':memory:'); });
 
@@ -176,5 +176,70 @@ describe('ProfileStore', () => {
   it('transaction: thành công thì ghi và trả kết quả', () => {
     const p = store.transaction(() => store.createProfile({ name: 'y' }));
     expect(store.getProfile(p.id)).toEqual(p);
+  });
+
+  it('extension: tạo, liệt kê, gán cho hồ sơ và nhóm, lấy hợp không trùng', () => {
+    const a = store.createExtension({ id: 'e1', name: 'A', version: '1.0', path: '/x/e1' });
+    const b = store.createExtension({ id: 'e2', name: 'B', version: '2.0', path: '/x/e2' });
+    expect(a).toMatchObject({ id: 'e1', name: 'A', version: '1.0', path: '/x/e1' });
+    expect(store.listExtensions().map((e) => e.id)).toEqual(['e1', 'e2']);
+    const g = store.createGroup('g');
+    const p = store.createProfile({ name: 'p', groupId: g.id });
+    const q = store.createProfile({ name: 'q' });
+    store.setProfileExtensions(p.id, ['e1']);
+    store.setGroupExtensions(g.id, ['e1', 'e2']);
+    expect(store.extensionsForProfile(p.id).map((e) => e.id).sort()).toEqual(['e1', 'e2']);
+    expect(store.extensionsForProfile(q.id)).toEqual([]);
+    expect(store.profileExtensionLinks()).toEqual({ [p.id]: ['e1'] });
+    expect(store.groupExtensionLinks()).toEqual({ [g.id]: ['e1', 'e2'] });
+    store.setProfileExtensions(p.id, ['e2']);
+    expect(store.profileExtensionLinks()).toEqual({ [p.id]: ['e2'] });
+    expect(b.createdAt).toBeGreaterThan(0);
+  });
+
+  it('xoá extension, hồ sơ hoặc nhóm thì dọn các dòng gán', () => {
+    store.createExtension({ id: 'e1', name: 'A', version: '1', path: '/x/e1' });
+    store.createExtension({ id: 'e2', name: 'B', version: '1', path: '/x/e2' });
+    const g = store.createGroup('g');
+    const p = store.createProfile({ name: 'p', groupId: g.id });
+    store.setProfileExtensions(p.id, ['e1', 'e2']);
+    store.setGroupExtensions(g.id, ['e1', 'e2']);
+    store.deleteExtension('e1');
+    expect(store.getExtension('e1')).toBeNull();
+    expect(store.profileExtensionLinks()).toEqual({ [p.id]: ['e2'] });
+    expect(store.groupExtensionLinks()).toEqual({ [g.id]: ['e2'] });
+    store.deleteGroup(g.id);
+    expect(store.groupExtensionLinks()).toEqual({});
+    store.deleteProfile(p.id);
+    expect(store.profileExtensionLinks()).toEqual({});
+  });
+
+  it('nâng cấp DB của giai đoạn 2 lên có bảng extension mà không mất dữ liệu', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'bf-store-v2-')), 'db.sqlite');
+    const old = new DatabaseSync(file);
+    old.exec(`CREATE TABLE grp (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+      CREATE TABLE proxy (
+        id TEXT PRIMARY KEY, protocol TEXT NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL,
+        username TEXT, password_encrypted TEXT, last_checked_at INTEGER, last_status TEXT, last_ip TEXT,
+        last_country TEXT, last_timezone TEXT, last_error TEXT);
+      CREATE TABLE profile (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL, group_id TEXT, notes TEXT NOT NULL DEFAULT '',
+        seed INTEGER NOT NULL, platform TEXT NOT NULL, platform_version TEXT, brand TEXT NOT NULL,
+        hardware_concurrency INTEGER, lang TEXT NOT NULL, accept_lang TEXT NOT NULL, timezone TEXT NOT NULL,
+        proxy_id TEXT, engine_version TEXT, created_at INTEGER NOT NULL, last_launched_at INTEGER);
+      INSERT INTO profile (id, name, seed, platform, brand, lang, accept_lang, timezone, created_at)
+        VALUES ('p1', 'cũ', 42, 'macos', 'Chrome', 'en-US', 'en-US,en', 'UTC', 1);
+      PRAGMA user_version = 2;`);
+    old.close();
+    const upgraded = new ProfileStore(file);
+    expect(upgraded.getProfile('p1')).toMatchObject({ name: 'cũ', seed: 42 });
+    expect(upgraded.listExtensions()).toEqual([]);
+    upgraded.createExtension({ id: 'e1', name: 'A', version: '1', path: '/x' });
+    upgraded.setProfileExtensions('p1', ['e1']);
+    expect(upgraded.extensionsForProfile('p1').map((e) => e.id)).toEqual(['e1']);
+    upgraded.close();
+    const check = new DatabaseSync(file);
+    expect((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(3);
+    check.close();
   });
 });

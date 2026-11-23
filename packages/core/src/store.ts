@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { hostDefaults, randomSeed } from './fingerprint';
-import type { Group, Profile, Proxy } from './types';
+import type { Extension, Group, Profile, Proxy } from './types';
 
 export type NewProfile = { name: string } & Partial<
   Pick<Profile, 'groupId' | 'notes' | 'platform' | 'platformVersion' | 'brand' | 'hardwareConcurrency' | 'lang' | 'acceptLang' | 'timezone' | 'proxyId'>
@@ -36,6 +36,9 @@ const MIGRATIONS = [
    ALTER TABLE proxy ADD COLUMN last_country TEXT;
    ALTER TABLE proxy ADD COLUMN last_timezone TEXT;
    ALTER TABLE proxy ADD COLUMN last_error TEXT;`,
+  `CREATE TABLE extension (id TEXT PRIMARY KEY, name TEXT NOT NULL, version TEXT NOT NULL, path TEXT NOT NULL, created_at INTEGER NOT NULL);
+   CREATE TABLE profile_extension (profile_id TEXT NOT NULL, extension_id TEXT NOT NULL, PRIMARY KEY (profile_id, extension_id));
+   CREATE TABLE group_extension (group_id TEXT NOT NULL, extension_id TEXT NOT NULL, PRIMARY KEY (group_id, extension_id));`,
 ];
 
 const PROFILE_COLS: Record<keyof ProfilePatch, string> = {
@@ -58,6 +61,13 @@ function toProfile(r: Row): Profile {
     acceptLang: r.accept_lang as string, timezone: r.timezone as string, proxyId: r.proxy_id as string | null,
     engineVersion: r.engine_version as string | null, createdAt: r.created_at as number,
     lastLaunchedAt: r.last_launched_at as number | null,
+  };
+}
+
+function toExtension(r: Row): Extension {
+  return {
+    id: r.id as string, name: r.name as string, version: r.version as string,
+    path: r.path as string, createdAt: r.created_at as number,
   };
 }
 
@@ -137,6 +147,7 @@ export class ProfileStore {
   deleteGroup(id: string): void {
     this.transaction(() => {
       this.db.prepare('UPDATE profile SET group_id = NULL WHERE group_id = ?').run(id);
+      this.db.prepare('DELETE FROM group_extension WHERE group_id = ?').run(id);
       this.db.prepare('DELETE FROM grp WHERE id = ?').run(id);
     });
   }
@@ -229,7 +240,70 @@ export class ProfileStore {
   }
 
   deleteProfile(id: string): void {
-    this.db.prepare('DELETE FROM profile WHERE id = ?').run(id);
+    this.transaction(() => {
+      this.db.prepare('DELETE FROM profile_extension WHERE profile_id = ?').run(id);
+      this.db.prepare('DELETE FROM profile WHERE id = ?').run(id);
+    });
+  }
+
+  createExtension(input: { id: string; name: string; version: string; path: string }): Extension {
+    this.db
+      .prepare('INSERT INTO extension (id, name, version, path, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(input.id, input.name, input.version, input.path, Date.now());
+    return this.getExtension(input.id)!;
+  }
+
+  getExtension(id: string): Extension | null {
+    const r = this.db.prepare('SELECT * FROM extension WHERE id = ?').get(id) as Row | undefined;
+    return r ? toExtension(r) : null;
+  }
+
+  listExtensions(): Extension[] {
+    return (this.db.prepare('SELECT * FROM extension ORDER BY created_at, rowid').all() as Row[]).map(toExtension);
+  }
+
+  deleteExtension(id: string): void {
+    this.transaction(() => {
+      this.db.prepare('DELETE FROM profile_extension WHERE extension_id = ?').run(id);
+      this.db.prepare('DELETE FROM group_extension WHERE extension_id = ?').run(id);
+      this.db.prepare('DELETE FROM extension WHERE id = ?').run(id);
+    });
+  }
+
+  /** Thay toàn bộ extension gán riêng cho hồ sơ. Không tự mở transaction: người gọi bọc. */
+  setProfileExtensions(profileId: string, extensionIds: string[]): void {
+    this.db.prepare('DELETE FROM profile_extension WHERE profile_id = ?').run(profileId);
+    const insert = this.db.prepare('INSERT INTO profile_extension (profile_id, extension_id) VALUES (?, ?)');
+    for (const extId of extensionIds) insert.run(profileId, extId);
+  }
+
+  /** Thay toàn bộ extension gán cho nhóm. Không tự mở transaction: người gọi bọc. */
+  setGroupExtensions(groupId: string, extensionIds: string[]): void {
+    this.db.prepare('DELETE FROM group_extension WHERE group_id = ?').run(groupId);
+    const insert = this.db.prepare('INSERT INTO group_extension (group_id, extension_id) VALUES (?, ?)');
+    for (const extId of extensionIds) insert.run(groupId, extId);
+  }
+
+  private links(sql: string): Record<string, string[]> {
+    const out: Record<string, string[]> = {};
+    for (const r of this.db.prepare(sql).all() as Row[]) (out[r.owner as string] ??= []).push(r.extension_id as string);
+    return out;
+  }
+
+  profileExtensionLinks(): Record<string, string[]> {
+    return this.links('SELECT profile_id AS owner, extension_id FROM profile_extension ORDER BY rowid');
+  }
+
+  groupExtensionLinks(): Record<string, string[]> {
+    return this.links('SELECT group_id AS owner, extension_id FROM group_extension ORDER BY rowid');
+  }
+
+  /** Extension gán riêng cho hồ sơ cộng với extension của nhóm nó, không trùng. */
+  extensionsForProfile(profileId: string): Extension[] {
+    const sql = `SELECT * FROM extension WHERE id IN (SELECT extension_id FROM profile_extension WHERE profile_id = ?)
+      OR id IN (SELECT ge.extension_id FROM group_extension ge JOIN profile p ON p.group_id = ge.group_id WHERE p.id = ?)
+      ORDER BY created_at, rowid`;
+    return (this.db.prepare(sql).all(profileId, profileId) as Row[]).map(toExtension);
   }
 
   markLaunched(id: string, engineVersion: string): void {

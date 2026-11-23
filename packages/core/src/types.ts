@@ -44,3 +44,12 @@ export interface SecretBox {
   encrypt(plain: string): string;
   decrypt(cipher: string): string;
 }
+
+export interface Extension {
+  id: string;
+  name: string;
+  version: string;
+  /** Thư mục đã giải nén của extension trong thư mục dữ liệu của app. */
+  path: string;
+  createdAt: number;
+}
