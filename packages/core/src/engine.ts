@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import { createWriteStream, existsSync, readFileSync } from 'node:fs';
+import { Readable, Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { extractArchive } from './engine-extract';
@@ -81,15 +83,17 @@ export class EngineManager {
       if (!res.ok || !res.body) throw new EngineError(`Tải nhân thất bại (HTTP ${res.status})`);
       const total = Number(res.headers.get('content-length') ?? 0);
       const hash = createHash('sha256');
-      const out = createWriteStream(tmp);
       let received = 0;
-      for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
-        hash.update(chunk);
-        if (!out.write(chunk)) await new Promise<void>((r) => out.once('drain', () => r()));
-        received += chunk.length;
-        onProgress?.(received, total);
-      }
-      await new Promise<void>((resolve, reject) => out.end((err?: Error | null) => (err ? reject(err) : resolve())));
+      const meter = new Transform({
+        transform(chunk: Buffer, _enc, cb) {
+          hash.update(chunk);
+          received += chunk.length;
+          onProgress?.(received, total);
+          cb(null, chunk);
+        },
+      });
+      // pipeline đóng/huỷ mọi stream khi có lỗi, không treo và không để lỗi chưa được bắt
+      await pipeline(Readable.fromWeb(res.body as never), meter, createWriteStream(tmp));
       if (hash.digest('hex') !== rel.sha256) throw new EngineError('SHA-256 của nhân không khớp, đã huỷ file tải');
       await rm(dest, { recursive: true, force: true });
       await mkdir(dest, { recursive: true });
@@ -100,7 +104,7 @@ export class EngineManager {
       await rm(dest, { recursive: true, force: true });
       throw err instanceof EngineError ? err : new EngineError(`Cài nhân thất bại: ${(err as Error).message}`);
     } finally {
-      await rm(tmp, { force: true });
+      await rm(tmp, { recursive: true, force: true });
     }
   }
 }

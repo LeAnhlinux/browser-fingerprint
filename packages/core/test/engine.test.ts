@@ -57,4 +57,24 @@ describe('EngineManager', () => {
     await expect(m.install()).rejects.toThrow(EngineError);
     expect(existsSync(join(dir, '1.2.3'))).toBe(false);
   });
+
+  it('luồng tải đứt giữa chừng thì báo lỗi và không để lại gì', async () => {
+    const broken = (async () => {
+      const body = new ReadableStream<Uint8Array>({
+        start(c) { c.enqueue(new Uint8Array(payload.subarray(0, 4))); },
+        pull() { throw new Error('mất kết nối'); },
+      });
+      return new Response(body, { headers: { 'content-length': String(payload.length) } });
+    }) as unknown as typeof fetch;
+    const m = new EngineManager({ enginesDir: dir, platform: 'darwin', manifest: manifest(sha), fetchImpl: broken, extract: fakeExtract });
+    await expect(m.install()).rejects.toThrow(EngineError);
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it('không ghi được file tải thì báo lỗi, không treo và không để lại gì', async () => {
+    mkdirSync(join(dir, '1.2.3.download')); // thư mục chiếm chỗ file tải nên mở ghi sẽ lỗi EISDIR
+    const m = new EngineManager({ enginesDir: dir, platform: 'darwin', manifest: manifest(sha), fetchImpl: fetchOk, extract: fakeExtract });
+    await expect(m.install()).rejects.toThrow(EngineError);
+    expect(readdirSync(dir)).toEqual([]);
+  });
 });
