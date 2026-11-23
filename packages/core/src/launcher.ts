@@ -40,6 +40,7 @@ export interface LauncherDeps {
   pidCommand?: (pid: number) => Promise<string | null>;
   killPid?: (pid: number) => void;
   cdpTimeoutMs?: number;
+  killAfterMs?: number;
 }
 
 interface Entry {
@@ -49,14 +50,22 @@ interface Entry {
   cleanedUp: Promise<void>;
 }
 
-export function cdpBrowserClose(cdpUrl: string): Promise<void> {
+export function cdpBrowserClose(cdpUrl: string, timeoutMs = 2000): Promise<void> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(cdpUrl);
+    const timer = setTimeout(() => {
+      ws.close();
+      reject(new Error('Hết thời gian kết nối CDP'));
+    }, timeoutMs);
     ws.addEventListener('open', () => {
+      clearTimeout(timer);
       ws.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
       resolve();
     });
-    ws.addEventListener('error', () => reject(new Error('Không kết nối được CDP')));
+    ws.addEventListener('error', () => {
+      clearTimeout(timer);
+      reject(new Error('Không kết nối được CDP'));
+    });
   });
 }
 
@@ -233,12 +242,12 @@ export class Launcher extends EventEmitter {
   async stop(profileId: string): Promise<void> {
     const entry = this.runs.get(profileId);
     if (!entry) return;
-    try {
-      await (this.deps.closeBrowser ?? cdpBrowserClose)(entry.info.cdpUrl);
-    } catch {
+    // Hẹn giờ SIGKILL trước, để lệnh đóng qua CDP có treo thì stop() vẫn có giới hạn thời gian.
+    const timer = setTimeout(() => entry.child.kill('SIGKILL'), this.deps.killAfterMs ?? 5000);
+    const close = (this.deps.closeBrowser ?? ((url: string) => cdpBrowserClose(url)))(entry.info.cdpUrl).catch(() => {
       entry.child.kill();
-    }
-    const timer = setTimeout(() => entry.child.kill('SIGKILL'), 5000);
+    });
+    await Promise.race([close, entry.cleanedUp]);
     await entry.cleanedUp;
     clearTimeout(timer);
   }

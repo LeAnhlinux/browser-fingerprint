@@ -1,5 +1,5 @@
 import type { CoreInfo, Group, NewProfile, ProfileView, ProxyView } from '@bf/core'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { EngineGate } from './EngineGate'
 import { ProfileForm } from './ProfileForm'
 import { ProfileList } from './ProfileList'
@@ -17,6 +17,7 @@ export default function App(): React.JSX.Element {
   const [showSettings, setShowSettings] = useState(false)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const savingRef = useRef(false)
 
   const reload = useCallback(async () => {
     const filter = {
@@ -87,7 +88,8 @@ export default function App(): React.JSX.Element {
   if (!info.engineInstalled) return <EngineGate info={info} onInstalled={() => void reload()} />
 
   const save = async (input: NewProfile): Promise<void> => {
-    if (saving) return
+    if (savingRef.current) return
+    savingRef.current = true
     const target = editing
     setSaving(true)
     try {
@@ -96,6 +98,7 @@ export default function App(): React.JSX.Element {
       )
       if (ok) setEditing(null)
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
   }

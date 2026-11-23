@@ -51,6 +51,13 @@ function toProxyView(x: Proxy): ProxyView {
   return { ...rest, hasPassword: passwordEncrypted !== null };
 }
 
+function normalizeRefs<T extends { proxyId?: string | null; groupId?: string | null }>(input: T): T {
+  const next = { ...input };
+  if (next.proxyId !== undefined) next.proxyId = next.proxyId || null;
+  if (next.groupId !== undefined) next.groupId = next.groupId || null;
+  return next;
+}
+
 export class Core extends EventEmitter {
   readonly store: ProfileStore;
   readonly engine: EngineManager;
@@ -116,16 +123,17 @@ export class Core extends EventEmitter {
   }
 
   createProfile(input: NewProfile): Profile {
-    const name = this.cleanName(input.name);
-    this.checkProfileRefs(input);
-    return this.store.createProfile({ ...input, name });
+    const clean = normalizeRefs(input);
+    const name = this.cleanName(clean.name);
+    this.checkProfileRefs(clean);
+    return this.store.createProfile({ ...clean, name });
   }
 
   updateProfile(id: string, patch: ProfilePatch): Profile {
     if (!this.store.getProfile(id)) throw new Error('Không tìm thấy hồ sơ');
-    const next = { ...patch };
-    if (patch.name !== undefined) next.name = this.cleanName(patch.name);
-    this.checkProfileRefs(patch);
+    const next = normalizeRefs(patch);
+    if (next.name !== undefined) next.name = this.cleanName(next.name);
+    this.checkProfileRefs(next);
     return this.store.updateProfile(id, next);
   }
 

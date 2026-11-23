@@ -267,4 +267,13 @@ describe('Launcher', () => {
     await expect(l.launch(q.id)).rejects.toThrow(LaunchError);
     expect(delayed).toHaveLength(1);
   });
+
+  it('stop vẫn kết thúc khi lệnh đóng qua CDP treo vô hạn', async () => {
+    const p = store.createProfile({ name: 'a' });
+    const l = new Launcher({ ...deps, closeBrowser: () => new Promise<void>(() => {}), killAfterMs: 30 });
+    await l.launch(p.id);
+    await l.stop(p.id);
+    expect(sp.calls[0].child.killed).toBe(true);
+    expect(l.status(p.id)).toBeNull();
+  });
 });

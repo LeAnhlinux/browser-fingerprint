@@ -101,4 +101,19 @@ describe('ProfileStore', () => {
     expect(b.getProfile(p.id)).toEqual(p);
     b.close();
   });
+
+  it('transaction: lỗi giữa chừng thì không ghi gì', () => {
+    expect(() =>
+      store.transaction(() => {
+        store.createProfile({ name: 'x' });
+        throw new Error('boom');
+      }),
+    ).toThrow('boom');
+    expect(store.listProfiles()).toEqual([]);
+  });
+
+  it('transaction: thành công thì ghi và trả kết quả', () => {
+    const p = store.transaction(() => store.createProfile({ name: 'y' }));
+    expect(store.getProfile(p.id)).toEqual(p);
+  });
 });

@@ -60,13 +60,28 @@ export class ProfileStore {
     this.db = new DatabaseSync(dbPath);
     const { user_version } = this.db.prepare('PRAGMA user_version').get() as { user_version: number };
     for (let i = user_version; i < MIGRATIONS.length; i++) {
-      this.db.exec(MIGRATIONS[i]);
-      this.db.exec(`PRAGMA user_version = ${i + 1}`);
+      this.transaction(() => {
+        this.db.exec(MIGRATIONS[i]);
+        this.db.exec(`PRAGMA user_version = ${i + 1}`);
+      });
     }
   }
 
   close(): void {
     this.db.close();
+  }
+
+  /** Chạy fn trong một transaction. Không được gọi lồng nhau. */
+  transaction<T>(fn: () => T): T {
+    this.db.exec('BEGIN');
+    try {
+      const result = fn();
+      this.db.exec('COMMIT');
+      return result;
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
   }
 
   private patch(table: string, cols: Record<string, string>, id: string, patch: Record<string, unknown>): void {
@@ -94,8 +109,10 @@ export class ProfileStore {
   }
 
   deleteGroup(id: string): void {
-    this.db.prepare('UPDATE profile SET group_id = NULL WHERE group_id = ?').run(id);
-    this.db.prepare('DELETE FROM grp WHERE id = ?').run(id);
+    this.transaction(() => {
+      this.db.prepare('UPDATE profile SET group_id = NULL WHERE group_id = ?').run(id);
+      this.db.prepare('DELETE FROM grp WHERE id = ?').run(id);
+    });
   }
 
   createProxy(input: Omit<Proxy, 'id'>): Proxy {
@@ -121,8 +138,10 @@ export class ProfileStore {
   }
 
   deleteProxy(id: string): void {
-    this.db.prepare('UPDATE profile SET proxy_id = NULL WHERE proxy_id = ?').run(id);
-    this.db.prepare('DELETE FROM proxy WHERE id = ?').run(id);
+    this.transaction(() => {
+      this.db.prepare('UPDATE profile SET proxy_id = NULL WHERE proxy_id = ?').run(id);
+      this.db.prepare('DELETE FROM proxy WHERE id = ?').run(id);
+    });
   }
 
   createProfile(input: NewProfile): Profile {

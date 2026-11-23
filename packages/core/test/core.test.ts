@@ -190,4 +190,13 @@ describe('Core', () => {
     expect(core.updateProfile(p.id, { groupId: g.id, proxyId: null }).groupId).toBe(g.id);
     expect(core.updateProfile(p.id, { notes: 'n' }).name).toBe('a');
   });
+
+  it('proxyId và groupId rỗng được coi là null', () => {
+    const p = core.createProfile({ name: 'a', proxyId: '', groupId: '' });
+    expect(p.proxyId).toBeNull();
+    expect(p.groupId).toBeNull();
+    const x = core.createProxy({ protocol: 'http', host: 'h', port: 1 });
+    core.updateProfile(p.id, { proxyId: x.id });
+    expect(core.updateProfile(p.id, { proxyId: '' }).proxyId).toBeNull();
+  });
 });
