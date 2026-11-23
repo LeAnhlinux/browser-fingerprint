@@ -23,7 +23,7 @@ const USAGE = `Cách dùng: bf <lệnh> [tuỳ chọn]
   delete <mã hồ sơ>
   start <mã hồ sơ> [--headless]      in địa chỉ CDP (ws://...) của trình duyệt
   stop <mã hồ sơ>
-  cookies export <mã hồ sơ> [-o <file>]
+  cookies export <mã hồ sơ> [-o <file>]   không có -o thì in phiên đăng nhập ra màn hình (stdout)
   cookies import <mã hồ sơ> <file>
   groups
   proxies

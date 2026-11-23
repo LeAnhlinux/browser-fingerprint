@@ -85,7 +85,7 @@ const browser = await chromium.connectOverCDP(cdpUrl);
 
 - `info`, `list`, `show <mã>`, `create <tên>`, `update <mã>`, `delete <mã>`
 - `start <mã> [--headless]` (in địa chỉ CDP), `stop <mã>`
-- `cookies export <mã> [-o <file>]`, `cookies import <mã> <file>`
+- `cookies export <mã> [-o <file>]`, `cookies import <mã> <file>`. Không có `-o`, `cookies export` in phiên đăng nhập (cookie) ra terminal; nên dùng `-o` (file chỉ chủ máy đọc được, quyền 0600)
 - `groups`, `proxies`, `proxy check <mã proxy>`
 - `--json` để in JSON, `--help` để xem đầy đủ tuỳ chọn
 
@@ -99,9 +99,13 @@ CDP=$(pnpm -s bf start <mã> --headless)
 claude mcp add browser-fingerprint -- node <đường dẫn tuyệt đối tới kho>/packages/api/dist/mcp-main.js
 ```
 
-12 công cụ: `list_profiles`, `get_profile`, `create_profile`, `update_profile`, `delete_profile`, `start_profile`, `stop_profile`, `import_cookies`, `export_cookies`, `list_groups`, `list_proxies`, `check_proxy`. Cookie đi qua MCP chỉ bằng file (`import_cookies` đọc một file, `export_cookies` ghi một file mới), nội dung cookie không bao giờ nằm trong cuộc trò chuyện. `delete_profile` xoá vĩnh viễn hồ sơ và dữ liệu của nó.
+12 công cụ: `list_profiles`, `get_profile`, `create_profile`, `update_profile`, `delete_profile`, `start_profile`, `stop_profile`, `import_cookies`, `export_cookies`, `list_groups`, `list_proxies`, `check_proxy`. `delete_profile` xoá vĩnh viễn hồ sơ và dữ liệu của nó; `update_profile` đổi được cả `proxyId`. Cả hai nằm trong tầm tay của trợ lý nào bạn gắn MCP vào.
 
-**Biến môi trường.** `BF_API=0` tắt API khi mở app; `BF_API_PORT` đổi cổng (app, CLI và MCP phải dùng cùng cổng); `BF_API_TOKEN_FILE` trỏ CLI và MCP tới file token khác. Nếu cổng đã bị chương trình khác dùng, app vẫn mở bình thường và báo lỗi ở cuối cửa sổ.
+Về cookie và độ tin cậy: kết quả của công cụ MCP không bao giờ chứa giá trị cookie. Nhưng `cdpUrl` (do `list_profiles`, `get_profile`, `start_profile` trả về) cho phép ai cầm nó điều khiển hoàn toàn trình duyệt của hồ sơ đó và đọc cookie của nó, nên chỉ gắn MCP server này vào trợ lý bạn tin tưởng. Địa chỉ CDP của một hồ sơ đang chạy không có xác thực: mọi tiến trình trên máy đều nối được vào nó trong lúc hồ sơ chạy (điều này đúng từ giai đoạn 1, dù có dùng API hay không).
+
+**Thư mục file của MCP.** `import_cookies` và `export_cookies` chỉ đọc và ghi trong một thư mục duy nhất, mặc định là `mcp-files` cạnh file token (ví dụ `~/Library/Application Support/Browser Fingerprint/mcp-files` trên macOS); đặt `BF_MCP_FILE_DIR` (đường dẫn tuyệt đối) để dùng thư mục khác. Thư mục được tạo khi dùng lần đầu với quyền 0700. Hai công cụ nhận một tên file (`fileName`: 1 đến 100 ký tự gồm chữ, số, `.`, `-`, `_`, không bắt đầu hoặc kết thúc bằng dấu chấm), không nhận đường dẫn. `export_cookies` tạo file mới (0600) và không bao giờ ghi đè; `import_cookies` không đọc file là liên kết (symlink). Muốn nhập một file cookie qua MCP, bạn tự chép file vào thư mục này trước rồi đưa tên file cho trợ lý.
+
+**Biến môi trường.** `BF_API=0` tắt API khi mở app; `BF_API_PORT` đổi cổng (app, CLI và MCP phải dùng cùng cổng); `BF_API_TOKEN_FILE` trỏ CLI và MCP tới file token khác; `BF_MCP_FILE_DIR` đổi thư mục file của MCP. Nếu cổng đã bị chương trình khác dùng, app vẫn mở bình thường và báo lỗi ở cuối cửa sổ.
 
 Giới hạn: không có HTTPS (chỉ nghe trên 127.0.0.1), một token cho mọi quyền, API không tạo, sửa, xoá nhóm, proxy hay extension, chưa thử trên Windows.
 
