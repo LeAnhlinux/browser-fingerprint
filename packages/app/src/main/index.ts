@@ -100,7 +100,12 @@ async function startApi(c: Core): Promise<void> {
     if (!Number.isInteger(port) || port < 1 || port > 65535)
       throw new Error('BF_API_PORT không hợp lệ')
     const token = loadOrCreateToken(tokenPath(app.getPath('userData')))
-    apiServer = await startApiServer({ core: c, token, port })
+    apiServer = await startApiServer({
+      core: c,
+      token,
+      port,
+      onError: (info) => console.error('[api] 500', info)
+    })
     apiStatus = { ...apiStatus, running: true, port: apiServer.port }
   } catch (e) {
     apiStatus = { ...apiStatus, error: e instanceof Error ? e.message : 'Không khởi động được API' }
