@@ -2,38 +2,36 @@ appId: local.browserfingerprint.app
 productName: Browser Fingerprint
 directories:
   buildResources: build
+  output: dist
+# Mọi phụ thuộc đã được gộp vào out/main (xem electron.vite.config.ts), nên chỉ cần thư mục out.
 files:
-  - '!**/.vscode/*'
-  - '!src/*'
-  - '!electron.vite.config.{js,ts,mjs,cjs}'
-  - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
-  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
-  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
-asarUnpack:
-  - resources/**
+  - out/**
+  - package.json
+mac:
+  target:
+    - target: dmg
+      arch: arm64
+  category: public.app-category.utilities
+  entitlementsInherit: build/entitlements.mac.plist
+  notarize: false
+  # Không có chứng chỉ Apple: ký ad-hoc để app chạy được trên Apple Silicon (chữ ký gốc của Electron bị hỏng khi đóng gói).
+  identity: "-"
+  # Hardened runtime chỉ cần khi công chứng với Apple; với chữ ký ad-hoc nó có thể chặn app nạp thư viện của chính nó.
+  hardenedRuntime: false
+dmg:
+  artifactName: Browser-Fingerprint-${version}-${arch}.${ext}
 win:
-  executableName: app
+  target:
+    - target: nsis
+      arch: x64
+  executableName: Browser Fingerprint
 nsis:
-  artifactName: ${name}-${version}-setup.${ext}
+  artifactName: Browser-Fingerprint-${version}-${arch}-setup.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
-mac:
-  entitlementsInherit: build/entitlements.mac.plist
-  extendInfo:
-    - NSCameraUsageDescription: Application requests access to the device's camera.
-    - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
-    - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
-    - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
-  notarize: false
-dmg:
-  artifactName: ${name}-${version}.${ext}
-linux:
-  target:
-    - AppImage
-    - snap
-    - deb
-  category: Utility
-appImage:
-  artifactName: ${name}-${version}.${ext}
 npmRebuild: false
+# Chỉ giữ tiếng Anh và tiếng Việt cho phần khung Electron.
+electronLanguages:
+  - en
+  - vi

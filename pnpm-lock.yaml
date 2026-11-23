@@ -28,20 +28,13 @@ importers:
         version: 5.1.1(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6)(jiti@2.7.0))
 
   packages/app:
-    dependencies:
+    devDependencies:
       '@bf/api':
         specifier: workspace:*
         version: link:../api
       '@bf/core':
         specifier: workspace:*
         version: link:../core
-      '@electron-toolkit/preload':
-        specifier: ^3.0.2
-        version: 3.0.2(electron@44.11.5)
-      '@electron-toolkit/utils':
-        specifier: ^4.0.0
-        version: 4.0.0(electron@44.11.5)
-    devDependencies:
       '@electron-toolkit/eslint-config-prettier':
         specifier: ^3.0.1
         version: 3.0.1(eslint@9.39.5(jiti@2.7.0))(prettier@3.10.1)
@@ -51,6 +44,9 @@ importers:
       '@electron-toolkit/tsconfig':
         specifier: ^2.0.0
         version: 2.0.0(@types/node@24.19.2)
+      '@electron-toolkit/utils':
+        specifier: ^4.0.0
+        version: 4.0.0(electron@44.11.5)
       '@types/node':
         specifier: ^24.19.2
         version: 24.19.2
@@ -219,11 +215,6 @@ packages:
     peerDependenciesMeta:
       typescript:
         optional: true
-
-  '@electron-toolkit/preload@3.0.2':
-    resolution: {integrity: sha512-TWWPToXd8qPRfSXwzf5KVhpXMfONaUuRAZJHsKthKgZR/+LqX1dZVSSClQ8OTAEduvLGdecljCsoT2jSshfoUg==}
-    peerDependencies:
-      electron: '>=13.0.0'
 
   '@electron-toolkit/tsconfig@2.0.0':
     resolution: {integrity: sha512-AdPsP770WhW7b260h13SHMdmjEEHJL6xFtgi3jwgdsSQbJOkJLeNnnpZW9qxTPCvmRI6vmdzWz5K3gibFS6SNg==}
@@ -3052,10 +3043,6 @@ snapshots:
     transitivePeerDependencies:
       - '@typescript/native'
       - supports-color
-
-  '@electron-toolkit/preload@3.0.2(electron@44.11.5)':
-    dependencies:
-      electron: 44.11.5
 
   '@electron-toolkit/tsconfig@2.0.0(@types/node@24.19.2)':
     dependencies:

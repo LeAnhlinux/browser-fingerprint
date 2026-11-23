@@ -6,9 +6,14 @@
     "build": "pnpm --filter @bf/core build && pnpm --filter @bf/api build",
     "test": "pnpm --filter @bf/core test && pnpm --filter @bf/api test",
     "dev": "pnpm run build && pnpm --filter @bf/app dev",
-    "bf": "node packages/api/dist/cli-main.js"
+    "bf": "node packages/api/dist/cli-main.js",
+    "dist:mac": "pnpm run build && pnpm --filter @bf/app dist:mac",
+    "dist:win": "pnpm run build && pnpm --filter @bf/app dist:win"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["electron", "esbuild"]
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild"
+    ]
   }
 }

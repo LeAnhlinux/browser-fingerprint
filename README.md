@@ -17,6 +17,21 @@ pnpm dev
 
 Lần chạy đầu tiên, ứng dụng tải nhân fingerprint-chromium (khoảng 140 MB) từ GitHub Releases và kiểm tra SHA-256 trước khi dùng. Đặt biến môi trường `BF_ENGINES_DIR` để dùng lại một thư mục nhân đã có.
 
+## Đóng gói bộ cài
+
+Cả hai lệnh chạy được trên Mac; file ra nằm ở `packages/app/dist/`.
+
+```sh
+pnpm dist:mac   # Browser-Fingerprint-<phiên bản>-arm64.dmg (chỉ Mac chip Apple)
+pnpm dist:win   # Browser-Fingerprint-<phiên bản>-x64-setup.exe
+```
+
+- Bộ cài không chứa nhân trình duyệt: app tải nhân ở lần mở đầu tiên, như khi chạy bằng `pnpm dev`. Bộ cài Mac chỉ có bản cho chip Apple vì nhân macOS chỉ phát hành bản arm64.
+- App đã cài dùng chung thư mục dữ liệu với `pnpm dev` (trên Mac là `~/Library/Application Support/Browser Fingerprint`), nên hồ sơ tạo ở bản nào cũng thấy ở bản kia. Đừng mở cả hai cùng lúc.
+- Bộ cài không có chữ ký số. Trên Mac, file dmg bạn tự build trên máy mình mở được ngay; nếu chép sang máy khác, lần đầu bấm chuột phải vào app > Mở, hoặc vào Cài đặt hệ thống > Quyền riêng tư và bảo mật > Vẫn mở. Trên Windows, SmartScreen sẽ cảnh báo: bấm "Thông tin thêm" > "Vẫn chạy".
+- Bộ cài Windows cài cho người dùng hiện tại (không cần quyền quản trị) và tạo lối tắt ngoài màn hình.
+- Lệnh `bf` và MCP server không nằm trong bộ cài: vẫn chạy từ thư mục kho như mục "API cục bộ, CLI và MCP" bên dưới, và nói chuyện được với app đã cài.
+
 ## Kiểm thử
 
 ```sh
@@ -112,7 +127,7 @@ Giới hạn: không có HTTPS (chỉ nghe trên 127.0.0.1), một token cho m�
 ## Giới hạn đã biết
 
 - Nhân là bản dựng của bên thứ ba, mã nguồn bản vá được công bố chậm khoảng một tháng. Không dùng các hồ sơ này cho ví tiền mã hoá giá trị cao.
-- Chưa có bộ cài đặt (installer).
+- Bộ cài Windows build được nhưng chưa từng được chạy thử trên máy Windows; phần riêng của Windows trong app (giải nén nhân, dọn tiến trình sót) cũng vậy.
 - Giai đoạn 2 (tạo hồ sơ hàng loạt, nhập danh sách proxy, kiểm tra proxy, múi giờ và ngôn ngữ theo proxy) đã xây dựng xong. Giai đoạn 3 (nhập và xuất cookie, thư viện extension gán theo nhóm hoặc theo hồ sơ) và giai đoạn 4 (API cục bộ, CLI, MCP) cũng đã xong.
 
 Việc tuân thủ điều khoản dịch vụ của từng nền tảng là trách nhiệm của người dùng.
