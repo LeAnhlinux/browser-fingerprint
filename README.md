@@ -1,6 +1,6 @@
 # Browser Fingerprint
 
-Trình quản lý hồ sơ trình duyệt tách biệt (antidetect) dùng cá nhân, chạy hoàn toàn trên máy bạn. Mỗi hồ sơ có thư mục dữ liệu riêng, seed dấu vân tay riêng và proxy riêng (tuỳ chọn). Đây là giai đoạn 1 của thiết kế trong `docs/superpowers/specs/2026-11-23-antidetect-browser-design.md`.
+Trình quản lý hồ sơ trình duyệt tách biệt (antidetect) dùng cá nhân, chạy hoàn toàn trên máy bạn. Mỗi hồ sơ có thư mục dữ liệu riêng, seed dấu vân tay riêng và proxy riêng (tuỳ chọn). Thiết kế (cả bốn giai đoạn đã xây xong) nằm trong `docs/superpowers/specs/2026-11-23-antidetect-browser-design.md`.
 
 ## Yêu cầu
 
@@ -20,8 +20,9 @@ Lần chạy đầu tiên, ứng dụng tải nhân fingerprint-chromium (khoả
 ## Kiểm thử
 
 ```sh
-pnpm test                              # kiểm thử đơn vị của packages/core
+pnpm test                              # kiểm thử đơn vị của packages/core và packages/api
 pnpm --filter @bf/core test:engine     # dùng nhân thật, mở cửa sổ trình duyệt thật trong vài giây
+pnpm run build && pnpm --filter @bf/api test:engine   # API, CLI và MCP với nhân thật (trình duyệt chạy ẩn)
 ```
 
 ## Kiểm tra proxy và dịch vụ tra IP
@@ -48,10 +49,66 @@ App sao chép extension vào thư mục dữ liệu của mình và không kiể
 
 Giới hạn: chưa tải extension thẳng từ Chrome Web Store, chưa tự cập nhật extension, chưa thử trên Windows.
 
+## API cục bộ, CLI và MCP
+
+**API.** API chạy ngay trong app, nên chỉ hoạt động khi app đang mở, tại `http://127.0.0.1:47800` (chỉ nghe trên máy bạn). Mọi request cần header `Authorization: Bearer <token>`. Token nằm ở file `api-token` trong thư mục dữ liệu của app (nút "Hiện file token" ở cuối cửa sổ). Ai đọc được file này là điều khiển được mọi hồ sơ và lấy được cookie: giữ như mật khẩu. Muốn đổi token, xoá file rồi mở lại app. API cũng từ chối request có `Host` hoặc `Origin` lạ.
+
+| Phương thức và đường dẫn | Việc làm |
+|---|---|
+| `GET /v1/info` | Trạng thái nhân, phiên bản API |
+| `GET /v1/profiles` (`?search=`, `?groupId=` hoặc `none`) | Liệt kê hồ sơ |
+| `POST /v1/profiles` | Tạo hồ sơ |
+| `GET /v1/profiles/:id` | Xem một hồ sơ |
+| `PATCH /v1/profiles/:id` | Sửa hồ sơ |
+| `DELETE /v1/profiles/:id` | Xoá hồ sơ (phải dừng trước) |
+| `POST /v1/profiles/:id/start` | Khởi động, trả `cdpUrl`; thân `{"headless": true}` để chạy ẩn; đang chạy thì trả phiên hiện có |
+| `POST /v1/profiles/:id/stop` | Dừng |
+| `GET /v1/profiles/:id/cookies` | Xuất cookie |
+| `POST /v1/profiles/:id/cookies` | Nhập cookie (thân `{"text": "..."}` hoặc `{"cookies": [...]}`) |
+| `GET /v1/groups`, `GET /v1/proxies` | Liệt kê nhóm, proxy |
+| `POST /v1/proxies/:id/check` | Kiểm tra proxy |
+
+```sh
+T=$(cat "$HOME/Library/Application Support/Browser Fingerprint/api-token")
+curl -s -X POST -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
+  -d '{"headless": true}' http://127.0.0.1:47800/v1/profiles/<mã>/start
+# -> {"cdpUrl":"ws://127.0.0.1:.../devtools/browser/...", ...}
+```
+
+Nối Playwright vào trình duyệt đó:
+
+```js
+const browser = await chromium.connectOverCDP(cdpUrl);
+```
+
+**CLI.** Chạy `pnpm run build` một lần, sau đó dùng `pnpm bf <lệnh>` (app phải đang mở):
+
+- `info`, `list`, `show <mã>`, `create <tên>`, `update <mã>`, `delete <mã>`
+- `start <mã> [--headless]` (in địa chỉ CDP), `stop <mã>`
+- `cookies export <mã> [-o <file>]`, `cookies import <mã> <file>`
+- `groups`, `proxies`, `proxy check <mã proxy>`
+- `--json` để in JSON, `--help` để xem đầy đủ tuỳ chọn
+
+```sh
+CDP=$(pnpm -s bf start <mã> --headless)
+```
+
+**MCP.** Cho Claude Code dùng các thao tác trên qua MCP (stdio):
+
+```sh
+claude mcp add browser-fingerprint -- node <đường dẫn tuyệt đối tới kho>/packages/api/dist/mcp-main.js
+```
+
+12 công cụ: `list_profiles`, `get_profile`, `create_profile`, `update_profile`, `delete_profile`, `start_profile`, `stop_profile`, `import_cookies`, `export_cookies`, `list_groups`, `list_proxies`, `check_proxy`. Cookie đi qua MCP chỉ bằng file (`import_cookies` đọc một file, `export_cookies` ghi một file mới), nội dung cookie không bao giờ nằm trong cuộc trò chuyện. `delete_profile` xoá vĩnh viễn hồ sơ và dữ liệu của nó.
+
+**Biến môi trường.** `BF_API=0` tắt API khi mở app; `BF_API_PORT` đổi cổng (app, CLI và MCP phải dùng cùng cổng); `BF_API_TOKEN_FILE` trỏ CLI và MCP tới file token khác. Nếu cổng đã bị chương trình khác dùng, app vẫn mở bình thường và báo lỗi ở cuối cửa sổ.
+
+Giới hạn: không có HTTPS (chỉ nghe trên 127.0.0.1), một token cho mọi quyền, API không tạo, sửa, xoá nhóm, proxy hay extension, chưa thử trên Windows.
+
 ## Giới hạn đã biết
 
 - Nhân là bản dựng của bên thứ ba, mã nguồn bản vá được công bố chậm khoảng một tháng. Không dùng các hồ sơ này cho ví tiền mã hoá giá trị cao.
 - Chưa có bộ cài đặt (installer).
-- Giai đoạn 2 (tạo hồ sơ hàng loạt, nhập danh sách proxy, kiểm tra proxy, múi giờ và ngôn ngữ theo proxy) đã xây dựng xong. Giai đoạn 3 (nhập và xuất cookie, thư viện extension gán theo nhóm hoặc theo hồ sơ) cũng đã xong; còn giai đoạn 4 chưa được xây dựng.
+- Giai đoạn 2 (tạo hồ sơ hàng loạt, nhập danh sách proxy, kiểm tra proxy, múi giờ và ngôn ngữ theo proxy) đã xây dựng xong. Giai đoạn 3 (nhập và xuất cookie, thư viện extension gán theo nhóm hoặc theo hồ sơ) và giai đoạn 4 (API cục bộ, CLI, MCP) cũng đã xong.
 
 Việc tuân thủ điều khoản dịch vụ của từng nền tảng là trách nhiệm của người dùng.
