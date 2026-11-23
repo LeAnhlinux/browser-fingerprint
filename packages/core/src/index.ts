@@ -6,3 +6,5 @@ export * from './engine';
 export * from './launcher';
 export * from './core';
 export * from './proxy-parse';
+export * from './proxy-checker';
+export * from './locale';
