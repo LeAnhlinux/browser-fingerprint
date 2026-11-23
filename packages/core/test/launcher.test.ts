@@ -276,4 +276,16 @@ describe('Launcher', () => {
     expect(sp.calls[0].child.killed).toBe(true);
     expect(l.status(p.id)).toBeNull();
   });
+
+  it('tuỳ chọn headless thêm cờ --headless=new và ghi vào RunInfo', async () => {
+    const p = store.createProfile({ name: 'a' });
+    const l = new Launcher(deps);
+    const info = await l.launch(p.id, { headless: true });
+    expect(sp.calls[0].args).toContain('--headless=new');
+    expect(info.headless).toBe(true);
+    await l.stop(p.id);
+    const again = await l.launch(p.id);
+    expect(sp.calls[1].args).not.toContain('--headless=new');
+    expect(again.headless).toBe(false);
+  });
 });

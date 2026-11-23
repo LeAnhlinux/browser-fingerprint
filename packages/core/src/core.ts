@@ -1,6 +1,8 @@
 import { EventEmitter } from 'node:events';
 import { mkdirSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { CdpError, type CdpSession, openCdp } from './cdp';
+import { type CdpCookie, type CookieParam, cookieKey, parseCookies, toExportCookies } from './cookie-parse';
 import { EngineManager, type EngineOptions } from './engine';
 import { hostPlatform } from './fingerprint';
 import { Launcher, type LauncherDeps, type RunInfo } from './launcher';
@@ -25,6 +27,13 @@ export type BulkCreateInput = {
   proxyMode?: 'none' | 'unused';
   applyLocale?: boolean;
 };
+export type CookieImportResult = {
+  format: 'json' | 'netscape';
+  imported: number;
+  failed: number;
+  sessionSkipped: number;
+  errors: { index: number; reason: string }[];
+};
 export type LocaleApplyResult = { updated: number; skipped: { id: string; name: string; reason: string }[] };
 
 export interface CoreOptions {
@@ -35,6 +44,7 @@ export interface CoreOptions {
   launcherOverrides?: Partial<LauncherDeps>;
   lookupUrl?: string;
   proxyCheck?: (u: Upstream) => Promise<ProxyCheckResult>;
+  cdpConnect?: (cdpUrl: string) => Promise<CdpSession>;
 }
 
 // Quy tắc host (giữ đơn giản): sau khi cắt khoảng trắng phải không rỗng và là tên miền
@@ -124,6 +134,8 @@ const MAX_NAME = 200;
 const MAX_IMPORT_CHARS = 1_000_000;
 const MAX_IMPORT_LINES = 5000;
 const MAX_CHECK_IDS = 1000;
+const MAX_COOKIE_CHARS = 5_000_000;
+const COOKIE_CHUNK = 500;
 
 function proxyKey(p: { protocol: string; host: string; port: number; username: string | null }): string {
   return `${p.protocol}|${p.host.toLowerCase()}|${p.port}|${p.username ?? ''}`;
@@ -141,6 +153,8 @@ export class Core extends EventEmitter {
   private profilesDir: string;
   private secrets: SecretBox;
   private proxyCheck: (u: Upstream) => Promise<ProxyCheckResult>;
+  private cdpConnect: (cdpUrl: string) => Promise<CdpSession>;
+  private cookieBusy = new Set<string>();
 
   constructor(opts: CoreOptions) {
     super();
@@ -149,6 +163,7 @@ export class Core extends EventEmitter {
     mkdirSync(this.profilesDir, { recursive: true });
     this.secrets = opts.secrets;
     this.proxyCheck = opts.proxyCheck ?? ((u) => runProxyCheck(u, { lookupUrl: opts.lookupUrl }));
+    this.cdpConnect = opts.cdpConnect ?? ((url) => openCdp(url));
     this.store = new ProfileStore(join(opts.dataDir, 'db.sqlite'));
     this.engine = new EngineManager({ enginesDir: opts.enginesDir ?? join(opts.dataDir, 'engines'), ...opts.engineOptions });
     this.launcher = new Launcher({
@@ -460,6 +475,84 @@ export class Core extends EventEmitter {
     });
     if (updates.length > 0) this.emit('change', '');
     return { updated: updates.length, skipped };
+  }
+
+  /**
+   * Chạy fn với một kết nối CDP tới hồ sơ. Hồ sơ chưa chạy thì mở ẩn qua Launcher (vẫn qua cầu proxy)
+   * và luôn dừng lại sau đó, kể cả khi fn lỗi.
+   */
+  private async withBrowser<T>(id: string, fn: (cdp: CdpSession, temporary: boolean) => Promise<T>): Promise<T> {
+    if (typeof id !== 'string' || !this.store.getProfile(id)) throw new Error('Không tìm thấy hồ sơ');
+    if (this.cookieBusy.has(id)) throw new Error('Hồ sơ đang có thao tác cookie khác, hãy chờ xong');
+    this.cookieBusy.add(id);
+    try {
+      let run = this.launcher.status(id);
+      const temporary = run === null;
+      if (!run) {
+        if (this.launcher.isActive(id)) throw new Error('Hồ sơ đang khởi động, hãy thử lại sau');
+        run = await this.launcher.launch(id, { headless: true });
+      }
+      try {
+        const cdp = await this.cdpConnect(run.cdpUrl);
+        try {
+          return await fn(cdp, temporary);
+        } finally {
+          cdp.close();
+        }
+      } finally {
+        if (temporary) await this.launcher.stop(id);
+      }
+    } finally {
+      this.cookieBusy.delete(id);
+    }
+  }
+
+  async importCookies(id: string, text: string): Promise<CookieImportResult> {
+    if (typeof text !== 'string') throw new Error(BAD_ARGS);
+    if (text.length > MAX_COOKIE_CHARS) throw new Error('Nội dung cookie quá dài (tối đa 5 MB)');
+    if (typeof id !== 'string' || !this.store.getProfile(id)) throw new Error('Không tìm thấy hồ sơ');
+    const parsed = parseCookies(text);
+    const persistent = parsed.cookies.filter((c) => c.expires !== undefined);
+    const pick = (temporary: boolean): CookieParam[] => (temporary ? persistent : parsed.cookies);
+    const result = (toSet: CookieParam[], imported: number): CookieImportResult => ({
+      format: parsed.format,
+      imported,
+      failed: toSet.length - imported,
+      sessionSkipped: parsed.cookies.length - toSet.length,
+      errors: parsed.errors,
+    });
+    // Không có gì để ghi thì không mở nhân. (Khi đó mọi cookie còn lại, nếu có, đều là cookie phiên của hồ sơ chưa chạy.)
+    if (pick(this.launcher.status(id) === null).length === 0) return result([], 0);
+    return this.withBrowser(id, async (cdp, temporary) => {
+      const toSet = pick(temporary);
+      const rejected = (err: unknown): boolean => err instanceof CdpError && err.protocol;
+      for (let i = 0; i < toSet.length; i += COOKIE_CHUNK) {
+        const chunk = toSet.slice(i, i + COOKIE_CHUNK);
+        try {
+          await cdp.call('Storage.setCookies', { cookies: chunk });
+        } catch (err) {
+          if (!rejected(err)) throw err;
+          // Nhân từ chối cả lô vì một cookie sai: ghi lại từng cookie để các cookie tốt vẫn vào.
+          for (const cookie of chunk) {
+            await cdp.call('Storage.setCookies', { cookies: [cookie] }).catch((e: unknown) => {
+              if (!rejected(e)) throw e;
+            });
+          }
+        }
+      }
+      // Nhân có thể nhận lệnh mà không lưu cookie, nên đếm bằng cách đọc lại.
+      const stored = await cdp.call<{ cookies: CdpCookie[] }>('Storage.getCookies');
+      const have = new Set(stored.cookies.map(cookieKey));
+      return result(toSet, toSet.filter((c) => have.has(cookieKey(c))).length);
+    });
+  }
+
+  async exportCookies(id: string): Promise<{ count: number; json: string }> {
+    return this.withBrowser(id, async (cdp) => {
+      const { cookies } = await cdp.call<{ cookies: CdpCookie[] }>('Storage.getCookies');
+      const out = toExportCookies(cookies);
+      return { count: out.length, json: JSON.stringify(out, null, 2) };
+    });
   }
 
   launch(id: string): Promise<RunInfo> {

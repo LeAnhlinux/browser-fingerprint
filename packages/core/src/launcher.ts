@@ -19,6 +19,12 @@ export interface RunInfo {
   cdpPort: number;
   cdpUrl: string;
   startedAt: number;
+  /** true: lần mở ẩn để app thao tác (ví dụ nhập cookie), không có cửa sổ. */
+  headless: boolean;
+}
+
+export interface LaunchOptions {
+  headless?: boolean;
 }
 
 export class LaunchError extends Error {}
@@ -126,9 +132,9 @@ export class Launcher extends EventEmitter {
     return this.runs.has(profileId) || this.starting.has(profileId);
   }
 
-  launch(profileId: string): Promise<RunInfo> {
+  launch(profileId: string, opts: LaunchOptions = {}): Promise<RunInfo> {
     if (this.closing) return Promise.reject(new LaunchError('Ứng dụng đang thoát'));
-    const p = this.doLaunch(profileId);
+    const p = this.doLaunch(profileId, opts);
     this.inflight.add(p);
     const done = (): void => {
       this.inflight.delete(p);
@@ -137,7 +143,7 @@ export class Launcher extends EventEmitter {
     return p;
   }
 
-  private async doLaunch(profileId: string): Promise<RunInfo> {
+  private async doLaunch(profileId: string, opts: LaunchOptions): Promise<RunInfo> {
     if (this.runs.has(profileId) || this.starting.has(profileId)) throw new LaunchError('Hồ sơ đang chạy');
     this.starting.add(profileId);
     let bridge: BridgeLike | null = null;
@@ -156,6 +162,7 @@ export class Launcher extends EventEmitter {
         '--no-first-run',
         '--no-default-browser-check',
       ];
+      if (opts.headless) args.push('--headless=new');
       if (profile.proxyId) {
         const proxy = this.deps.store.getProxy(profile.proxyId);
         if (!proxy) throw new LaunchError('Proxy của hồ sơ không còn tồn tại');
@@ -203,6 +210,7 @@ export class Launcher extends EventEmitter {
         cdpPort: cdp.port,
         cdpUrl: `ws://127.0.0.1:${cdp.port}${cdp.path}`,
         startedAt: Date.now(),
+        headless: opts.headless === true,
       };
       // Mọi bước có thể lỗi phải xong trước khi đăng ký chạy, để catch dọn đúng.
       await writeFile(join(dir, RUN_FILE), JSON.stringify({ pid: info.pid }));
