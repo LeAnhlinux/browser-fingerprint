@@ -1,7 +1,11 @@
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, rmSync, truncateSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ApiClient } from '../src/client';
-import { TOOL_NAMES, createMcpHandler, serveStdio } from '../src/mcp';
+import { MAX_COOKIE_FILE_BYTES, TOOL_NAMES, createMcpHandler, readCookieFile, serveStdio } from '../src/mcp';
 import { type ApiServer, startApiServer } from '../src/server';
 import { COOKIE_SECRET, type FakeCore, TOKEN, fakeCore } from './helpers';
 
@@ -182,5 +186,49 @@ describe('MCP: stdio', () => {
     expect(replies[1].error).toMatchObject({ code: -32700 });
     expect(replies[2].result.tools).toHaveLength(12);
     expect(lines.every((l) => !l.includes('\n'))).toBe(true);
+  });
+});
+
+describe('readCookieFile: đường dẫn do mô hình chỉ định', () => {
+  const posix = process.platform !== 'win32';
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'bf-mcp-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('đọc file thường nhỏ, kể cả file đúng bằng giới hạn', async () => {
+    writeFileSync(join(dir, 'a.json'), '[{"name":"sid"}]');
+    expect(await readCookieFile(join(dir, 'a.json'))).toBe('[{"name":"sid"}]');
+    truncateSync(join(dir, 'a.json'), MAX_COOKIE_FILE_BYTES);
+    expect((await readCookieFile(join(dir, 'a.json'))).length).toBe(MAX_COOKIE_FILE_BYTES);
+  });
+
+  it('từ chối thư mục, file không tồn tại và file quá giới hạn', async () => {
+    mkdirSync(join(dir, 'd'));
+    await expect(readCookieFile(join(dir, 'd'))).rejects.toThrow();
+    await expect(readCookieFile(join(dir, 'khong-co'))).rejects.toThrow();
+    writeFileSync(join(dir, 'big.json'), '');
+    truncateSync(join(dir, 'big.json'), MAX_COOKIE_FILE_BYTES + 1);
+    await expect(readCookieFile(join(dir, 'big.json'))).rejects.toThrow();
+  });
+
+  it.skipIf(!posix)('từ chối thiết bị ký tự và FIFO ngay lập tức thay vì treo', { timeout: 3000 }, async () => {
+    await expect(readCookieFile('/dev/zero')).rejects.toThrow();
+    let fifo = true;
+    try {
+      execFileSync('mkfifo', [join(dir, 'f')]);
+    } catch {
+      fifo = false;
+    }
+    if (fifo) await expect(readCookieFile(join(dir, 'f'))).rejects.toThrow();
+  });
+
+  it('import_cookies báo lỗi cố định khi đường dẫn không đọc được', async () => {
+    const real = createMcpHandler({ client: {} as ApiClient, readFile: readCookieFile, writeNewFile: async () => {} });
+    const res: any = await real({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'import_cookies', arguments: { id: 'p1', filePath: dir } } });
+    expect(res.result).toMatchObject({ isError: true, content: [{ text: `Không đọc được file: ${dir}` }] });
   });
 });

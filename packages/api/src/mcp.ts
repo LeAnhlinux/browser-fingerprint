@@ -1,3 +1,5 @@
+import { constants } from 'node:fs';
+import { open, stat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { createInterface } from 'node:readline';
 import type { ProfileInput, ProfileUpdate } from '@bf/core';
@@ -15,6 +17,36 @@ const SERVER_INFO = { name: 'browser-fingerprint', version: '0.1.0' };
 const INSTRUCTIONS =
   'Điều khiển app Browser Fingerprint đang mở trên máy này: quản lý hồ sơ trình duyệt tách biệt, khởi động để lấy địa chỉ CDP, nhập và xuất cookie qua file. ' +
   'App phải đang mở. Cookie không bao giờ được trả về trong kết quả công cụ.';
+
+/** Giới hạn của lõi app cho văn bản cookie; đọc quá mức này là vô ích. */
+export const MAX_COOKIE_FILE_BYTES = 5_000_000;
+
+/**
+ * Đọc file cookie do mô hình chỉ định (đầu vào không tin cậy): chỉ file thường, không quá giới hạn.
+ * stat trước khi mở để không chạm vào FIFO/thiết bị; mở với O_NONBLOCK phòng file bị thay giữa chừng;
+ * kiểm lại trên handle đã mở và đọc có chặn trên nên không bao giờ nạp quá giới hạn vào bộ nhớ.
+ */
+export async function readCookieFile(path: string): Promise<string> {
+  const before = await stat(path);
+  if (!before.isFile()) throw new Error('not a regular file');
+  if (before.size > MAX_COOKIE_FILE_BYTES) throw new Error('file too large');
+  const handle = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+  try {
+    const after = await handle.stat();
+    if (!after.isFile()) throw new Error('not a regular file');
+    const buffer = Buffer.alloc(MAX_COOKIE_FILE_BYTES + 1);
+    let total = 0;
+    while (total < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, total, buffer.length - total, total);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+    }
+    if (total > MAX_COOKIE_FILE_BYTES) throw new Error('file too large');
+    return buffer.toString('utf8', 0, total);
+  } finally {
+    await handle.close();
+  }
+}
 
 /** Lỗi do người gọi công cụ: thành kết quả isError, không phải lỗi giao thức. */
 class ToolError extends Error {}
