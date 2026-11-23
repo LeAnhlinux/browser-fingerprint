@@ -1,5 +1,7 @@
 import type { CoreInfo, Group, NewProfile, ProfileView, ProxyView } from '@bf/core'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { BulkBar } from './BulkBar'
+import { BulkCreateForm } from './BulkCreateForm'
 import { EngineGate } from './EngineGate'
 import { ProfileForm } from './ProfileForm'
 import { ProfileList } from './ProfileList'
@@ -18,6 +20,8 @@ export default function App(): React.JSX.Element {
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
   const savingRef = useRef(false)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [showBulkCreate, setShowBulkCreate] = useState(false)
 
   const reload = useCallback(async () => {
     const filter = {
@@ -33,6 +37,11 @@ export default function App(): React.JSX.Element {
       ])
       setInfo(i)
       setProfiles(p)
+      setSelected((prev) => {
+        const visible = new Set(p.map((x) => x.id))
+        const next = new Set([...prev].filter((id) => visible.has(id)))
+        return next.size === prev.size ? prev : next
+      })
       setGroups(g)
       setProxies(x)
       if (
@@ -140,6 +149,14 @@ export default function App(): React.JSX.Element {
           Nhóm và proxy
         </button>
         <button
+          onClick={() => {
+            setError('')
+            setShowBulkCreate(true)
+          }}
+        >
+          Tạo hàng loạt
+        </button>
+        <button
           className="primary"
           onClick={() => {
             setError('')
@@ -150,6 +167,15 @@ export default function App(): React.JSX.Element {
         </button>
       </div>
       {error && <p className="error">{error}</p>}
+      {selected.size > 0 && (
+        <BulkBar
+          ids={profiles.filter((p) => selected.has(p.id)).map((p) => p.id)}
+          groups={groups}
+          proxies={proxies}
+          run={run}
+          onClear={() => setSelected(new Set())}
+        />
+      )}
       <ProfileList
         profiles={profiles}
         groups={groups}
@@ -161,6 +187,25 @@ export default function App(): React.JSX.Element {
           setEditing(p)
         }}
         onDelete={remove}
+        selected={selected}
+        onToggle={(id) =>
+          setSelected((prev) => {
+            const next = new Set(prev)
+            if (next.has(id)) next.delete(id)
+            else next.add(id)
+            return next
+          })
+        }
+        onToggleAll={(ids, checked) =>
+          setSelected((prev) => {
+            const next = new Set(prev)
+            for (const id of ids) {
+              if (checked) next.add(id)
+              else next.delete(id)
+            }
+            return next
+          })
+        }
       />
       <p className="muted">Nhân: fingerprint-chromium {info.engineVersion}</p>
       {editing && (
@@ -174,6 +219,17 @@ export default function App(): React.JSX.Element {
           saving={saving}
           onCancel={() => {
             setEditing(null)
+            setError('')
+          }}
+        />
+      )}
+      {showBulkCreate && (
+        <BulkCreateForm
+          groups={groups}
+          error={error}
+          run={run}
+          onClose={() => {
+            setShowBulkCreate(false)
             setError('')
           }}
         />

@@ -8,6 +8,9 @@ interface Props {
   onStop: (id: string) => void
   onEdit: (p: ProfileView) => void
   onDelete: (p: ProfileView) => void
+  selected: Set<string>
+  onToggle: (id: string) => void
+  onToggleAll: (ids: string[], checked: boolean) => void
 }
 
 export function ProfileList({
@@ -17,7 +20,10 @@ export function ProfileList({
   onStart,
   onStop,
   onEdit,
-  onDelete
+  onDelete,
+  selected,
+  onToggle,
+  onToggleAll
 }: Props): React.JSX.Element {
   const groupName = (id: string | null): string => groups.find((g) => g.id === id)?.name ?? '—'
   const proxyLabel = (id: string | null): string => {
@@ -28,10 +34,21 @@ export function ProfileList({
   if (profiles.length === 0)
     return <p className="muted">Chưa có hồ sơ nào khớp. Bấm &quot;Hồ sơ mới&quot; để tạo.</p>
 
+  const allIds = profiles.map((p) => p.id)
+  const allSelected = allIds.length > 0 && allIds.every((id) => selected.has(id))
+
   return (
     <table>
       <thead>
         <tr>
+          <th className="check">
+            <input
+              type="checkbox"
+              aria-label="Chọn tất cả"
+              checked={allSelected}
+              onChange={(e) => onToggleAll(allIds, e.target.checked)}
+            />
+          </th>
           <th>Tên</th>
           <th>Nhóm</th>
           <th>Proxy</th>
@@ -43,6 +60,14 @@ export function ProfileList({
       <tbody>
         {profiles.map((p) => (
           <tr key={p.id}>
+            <td className="check">
+              <input
+                type="checkbox"
+                aria-label={`Chọn ${p.name}`}
+                checked={selected.has(p.id)}
+                onChange={() => onToggle(p.id)}
+              />
+            </td>
             <td>{p.name}</td>
             <td>{groupName(p.groupId)}</td>
             <td>{proxyLabel(p.proxyId)}</td>
