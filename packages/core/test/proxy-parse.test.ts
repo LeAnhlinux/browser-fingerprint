@@ -55,4 +55,69 @@ describe('parseProxyList', () => {
   it('văn bản rỗng cho kết quả rỗng', () => {
     expect(parseProxyList('  \n ')).toEqual({ proxies: [], errors: [] });
   });
+
+  const AMBIGUOUS = 'Dòng có thể hiểu theo hai cách, hãy ghi dạng giao_thức://user:pass@host:port';
+
+  it('định dạng host:port:user:pass giữ nguyên @ trong tài khoản và mật khẩu', () => {
+    expect(parseProxyList('1.1.1.1:80:me@x.com:pw').proxies[0]).toMatchObject({
+      host: '1.1.1.1', port: 80, username: 'me@x.com', password: 'pw',
+    });
+    expect(parseProxyList('1.1.1.1:80:user:pa@ss').proxies[0]).toMatchObject({
+      host: '1.1.1.1', port: 80, username: 'user', password: 'pa@ss',
+    });
+  });
+
+  it('dạng user:pass@host:port với tài khoản chứa @', () => {
+    expect(parseProxyList('me@x.com:pw@1.1.1.1:80').proxies[0]).toMatchObject({
+      host: '1.1.1.1', port: 80, username: 'me@x.com', password: 'pw',
+    });
+  });
+
+  it('dòng hiểu được theo hai cách bị từ chối, không đoán', () => {
+    const r = parseProxyList('1.1.1.1:80:me@x.com:1234\nuser:1234:x@host:80');
+    expect(r.proxies).toEqual([]);
+    expect(r.errors).toEqual([
+      { line: 1, reason: AMBIGUOUS },
+      { line: 2, reason: AMBIGUOUS },
+    ]);
+  });
+
+  it('kiểm tra cổng', () => {
+    expect(parseProxyList('h:0').errors).toHaveLength(1);
+    expect(parseProxyList('h:65536').errors).toHaveLength(1);
+    expect(parseProxyList('h:00080').proxies[0].port).toBe(80);
+  });
+
+  it('mật khẩu rỗng thành null', () => {
+    expect(parseProxyList('u:@1.1.1.1:80').proxies[0]).toMatchObject({ username: 'u', password: null });
+    expect(parseProxyList('1.1.1.1:80:u:').proxies[0]).toMatchObject({ username: 'u', password: null });
+  });
+
+  it('dạng URL và địa chỉ không hợp lệ', () => {
+    expect(parseProxyList('http://u:p@1.1.1.1:80/').proxies[0]).toMatchObject({ host: '1.1.1.1', port: 80, username: 'u', password: 'p' });
+    expect(parseProxyList('http://1.1.1.1:80/path').errors).toHaveLength(1);
+    expect(parseProxyList('[::1]:80').errors).toHaveLength(1);
+    expect(parseProxyList('my host:80').errors).toHaveLength(1);
+    expect(parseProxyList('a/b:80').errors).toHaveLength(1);
+  });
+
+  it('không lý do lỗi nào chứa host, tài khoản hay mật khẩu của đầu vào', () => {
+    const lines = [
+      'ftp://secrethost:21',
+      'secrethost:80:secretuser',
+      'secrethost:99999',
+      ':secretpw@secrethost:80',
+      '1.1.1.1:80:secret@user.com:1234',
+      'secretuser:1234:x@secrethost:80',
+      'secretuser:secretpw@my secrethost:80',
+      'http://secretuser:secretpw@secrethost:80/path',
+      '[::1]:80:secretuser:secretpw',
+    ];
+    const r = parseProxyList(lines.join('\n'));
+    expect(r.proxies).toEqual([]);
+    expect(r.errors).toHaveLength(lines.length);
+    for (const e of r.errors) {
+      expect(e.reason).not.toMatch(/secret|1\.1\.1\.1|user\.com|::1/);
+    }
+  });
 });
