@@ -16,7 +16,8 @@ import type {
   ProxyPatch,
   ProxyView,
   RunInfo,
-  FingerprintSnapshot
+  FingerprintSnapshot,
+  CapMonsterStatus
 } from '@bf/core'
 
 const call = <T>(method: string, ...args: unknown[]): Promise<T> =>
@@ -71,6 +72,10 @@ export const api = {
   applyProxyLocale: (ids: string[]) => call<LocaleApplyResult>('applyProxyLocale', ids),
   apiStatus: () => window.bf.apiStatus() as Promise<ApiStatus>,
   revealApiToken: () => window.bf.revealApiToken() as Promise<boolean>,
+  capmonsterStatus: () => call<CapMonsterStatus>('capmonsterStatus'),
+  setCapMonsterKey: (key: string | null) => call<void>('setCapMonsterKey', key),
+  capmonsterBalance: () => call<number>('capmonsterBalance'),
+  installCapMonsterExtension: () => call<Extension>('installCapMonsterExtension'),
   launch: (id: string) => call<RunInfo>('launch', id),
   stop: (id: string) => call<void>('stop', id)
 }

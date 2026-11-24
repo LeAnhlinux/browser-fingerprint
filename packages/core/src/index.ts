@@ -14,3 +14,4 @@ export * from './crx';
 export * from './extension-files';
 export * from './screen-keeper';
 export * from './fingerprint-probe';
+export * from './capmonster';

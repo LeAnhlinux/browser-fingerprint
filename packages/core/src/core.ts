@@ -1,8 +1,19 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
+import { rename, rm } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
+import {
+  type CapMonsterOptions,
+  type SolveResult,
+  applyCapMonsterKey,
+  checkSolveTimeout,
+  checkTask,
+  downloadCapMonsterZip,
+  getBalance,
+  isCapMonsterExtension,
+  solveTask,
+} from './capmonster';
 import { CdpError, type CdpSession, openCdp } from './cdp';
 import { type CdpCookie, type CookieParam, cookieKey, parseCookies, toExportCookies } from './cookie-parse';
 import { EngineManager, type EngineOptions } from './engine';
@@ -57,7 +68,22 @@ export interface CoreOptions {
   proxyCheck?: (u: Upstream) => Promise<ProxyCheckResult>;
   cdpConnect?: (cdpUrl: string) => Promise<CdpSession>;
   probe?: (exe: string, args: string[]) => Promise<ProbeResult>;
+  capmonster?: CapMonsterOptions;
+  /** Tải gói extension CapMonster vào file đích (thay được trong test). */
+  capmonsterDownload?: (destFile: string) => Promise<void>;
 }
+
+export interface CapMonsterStatus {
+  hasKey: boolean;
+  /** Có key đã lưu nhưng không giải mã được (ví dụ keychain của máy đổi): cần nhập lại. */
+  keyUnreadable: boolean;
+  /** Extension CapMonster trong thư viện, nếu có. */
+  extension: Extension | null;
+}
+
+const CAPMONSTER_KEY_SETTING = 'capmonster.key';
+const CAPMONSTER_KEY_RE = /^[A-Za-z0-9_-]{8,128}$/;
+const MAX_CONCURRENT_SOLVES = 10;
 
 // Quy tắc host (giữ đơn giản): sau khi cắt khoảng trắng phải không rỗng và là tên miền
 // (chữ, số, '.', '-', '_'), IPv4, hoặc IPv6 không ngoặc vuông (chỉ chữ số hex, ':' và '.', có ít nhất hai dấu ':').
@@ -218,6 +244,10 @@ export class Core extends EventEmitter {
   private cookieBusy = new Set<string>();
   private probe: (exe: string, args: string[]) => Promise<ProbeResult>;
   private measuring = new Map<string, Promise<FingerprintSnapshot>>();
+  private capmonsterOpts: CapMonsterOptions;
+  private capmonsterDownload: (destFile: string) => Promise<void>;
+  private capmonsterInstalling: Promise<Extension> | null = null;
+  private capmonsterSolving = 0;
 
   constructor(opts: CoreOptions) {
     super();
@@ -230,6 +260,8 @@ export class Core extends EventEmitter {
     this.proxyCheck = opts.proxyCheck ?? ((u) => runProxyCheck(u, { lookupUrl: opts.lookupUrl }));
     this.cdpConnect = opts.cdpConnect ?? ((url) => openCdp(url));
     this.probe = opts.probe ?? ((exe, args) => probeFingerprint(exe, args));
+    this.capmonsterOpts = opts.capmonster ?? {};
+    this.capmonsterDownload = opts.capmonsterDownload ?? ((dest) => downloadCapMonsterZip(dest));
     this.store = new ProfileStore(join(opts.dataDir, 'db.sqlite'));
     this.engine = new EngineManager({ enginesDir: opts.enginesDir ?? join(opts.dataDir, 'engines'), ...opts.engineOptions });
     this.launcher = new Launcher({
@@ -628,15 +660,158 @@ export class Core extends EventEmitter {
     return { updated: updates.length, skipped };
   }
 
-  private extensionDirsFor(profileId: string): string[] {
-    return this.store.extensionsForProfile(profileId).map((e) => {
+  private async extensionDirsFor(profileId: string): Promise<string[]> {
+    const dirs: string[] = [];
+    let key: string | undefined;
+    for (const e of this.store.extensionsForProfile(profileId)) {
       // Luôn tính đường dẫn từ mã extension, không tin cột path trong DB.
       const dir = join(this.extensionsDir, e.id);
+      const capmonster = await isCapMonsterExtension(dir, e.name);
+      if (capmonster && this.capmonsterInstalling) {
+        throw new LaunchError('Đang cài hoặc cập nhật extension CapMonster. Hãy mở lại hồ sơ sau giây lát.');
+      }
       if (!existsSync(join(dir, 'manifest.json'))) {
         throw new LaunchError(`Thiếu file của extension "${e.name}". Hãy xoá rồi thêm lại extension này.`);
       }
-      return dir;
+      if (capmonster) {
+        // Key không giải mã được (ví dụ keychain đổi) thì vẫn mở hồ sơ, chỉ không nạp key.
+        key ??= this.readCapmonsterKey().key ?? '';
+        try {
+          await applyCapMonsterKey(dir, key);
+        } catch {
+          throw new LaunchError(`Không ghi được API key vào extension "${e.name}"`);
+        }
+      }
+      dirs.push(dir);
+    }
+    return dirs;
+  }
+
+  /** Key đã lưu (đã giải mã); unreadable khi có lưu mà không giải mã được. */
+  private readCapmonsterKey(): { key: string | null; unreadable: boolean } {
+    const stored = this.store.getSetting(CAPMONSTER_KEY_SETTING);
+    if (stored === null) return { key: null, unreadable: false };
+    try {
+      return { key: this.secrets.decrypt(stored), unreadable: false };
+    } catch {
+      return { key: null, unreadable: true };
+    }
+  }
+
+  private requireCapmonsterKey(): string {
+    const { key, unreadable } = this.readCapmonsterKey();
+    if (unreadable) throw new Error('Không đọc được API key CapMonster đã lưu. Hãy nhập lại key trong Cài đặt.');
+    if (!key) throw new Error('Chưa nhập API key CapMonster (Cài đặt → CapMonster)');
+    return key;
+  }
+
+  private async capmonsterExtensions(): Promise<Extension[]> {
+    const found: Extension[] = [];
+    for (const e of this.store.listExtensions()) {
+      if (await isCapMonsterExtension(join(this.extensionsDir, e.id), e.name)) found.push(e);
+    }
+    return found;
+  }
+
+  async capmonsterStatus(): Promise<CapMonsterStatus> {
+    const { key, unreadable } = this.readCapmonsterKey();
+    return { hasKey: key !== null, keyUnreadable: unreadable, extension: (await this.capmonsterExtensions())[0] ?? null };
+  }
+
+  /**
+   * Lưu (mã hoá) hoặc xoá API key. Key không bao giờ được trả ra ngoài. Ghi ngay key mới (hoặc chuỗi rỗng)
+   * vào mọi extension CapMonster, để xoá key thì bản chữ thường trong file extension cũng mất luôn.
+   */
+  async setCapMonsterKey(key: string | null): Promise<void> {
+    if (key !== null && typeof key !== 'string') throw new Error(BAD_ARGS);
+    const value = key === null ? '' : key.trim();
+    if (value !== '' && !CAPMONSTER_KEY_RE.test(value)) throw new Error('API key CapMonster không hợp lệ');
+    this.store.setSetting(CAPMONSTER_KEY_SETTING, value === '' ? null : this.secrets.encrypt(value));
+    try {
+      for (const e of await this.capmonsterExtensions()) await applyCapMonsterKey(join(this.extensionsDir, e.id), value);
+    } finally {
+      this.emit('change', '');
+    }
+  }
+
+  async capmonsterBalance(): Promise<number> {
+    return getBalance(this.requireCapmonsterKey(), this.capmonsterOpts);
+  }
+
+  /** Giải một task theo định dạng API CapMonster (dùng cho script qua REST/CLI/MCP). */
+  async solveCaptcha(task: unknown, timeoutMs?: number): Promise<SolveResult> {
+    const checked = checkTask(task);
+    const timeout = checkSolveTimeout(timeoutMs);
+    const key = this.requireCapmonsterKey();
+    // Chặn script chạy lỗi tiêu tiền song song không giới hạn.
+    if (this.capmonsterSolving >= MAX_CONCURRENT_SOLVES) throw new Error(`Đang giải ${MAX_CONCURRENT_SOLVES} captcha cùng lúc; hãy chờ bớt rồi gửi tiếp`);
+    this.capmonsterSolving++;
+    try {
+      return await solveTask(key, checked, timeout, this.capmonsterOpts);
+    } finally {
+      this.capmonsterSolving--;
+    }
+  }
+
+  /** Tải gói chính thức rồi cài mới, hoặc thay file tại chỗ để giữ gán nhóm/hồ sơ và dữ liệu extension. */
+  installCapMonsterExtension(): Promise<Extension> {
+    this.capmonsterInstalling ??= this.doInstallCapMonster().finally(() => {
+      this.capmonsterInstalling = null;
     });
+    return this.capmonsterInstalling;
+  }
+
+  private assertExtensionIdle(ext: Extension): void {
+    const users = this.store
+      .listProfiles()
+      .filter((p) => this.launcher.isActive(p.id) && this.store.extensionsForProfile(p.id).some((e) => e.id === ext.id));
+    if (users.length > 0) {
+      throw new Error(`Extension đang được dùng bởi hồ sơ đang chạy: ${users.map((p) => p.name).join(', ')}. Hãy dừng các hồ sơ đó trước.`);
+    }
+  }
+
+  private async doInstallCapMonster(): Promise<Extension> {
+    if (this.extensionsDir.includes(',')) throw new Error('Thư mục dữ liệu của ứng dụng chứa dấu phẩy nên không nạp được extension');
+    const existing = (await this.capmonsterExtensions())[0] ?? null;
+    if (existing) this.assertExtensionIdle(existing);
+    const work = join(this.extensionsDir, `.capmonster-${randomUUID()}`);
+    const zip = `${work}.zip`;
+    try {
+      await this.capmonsterDownload(zip);
+      const meta = await installExtensionFiles(zip, work);
+      if (!(await isCapMonsterExtension(work, meta.name))) throw new Error('File tải về không phải extension CapMonster');
+      if (existing) {
+        this.assertExtensionIdle(existing);
+        const dir = join(this.extensionsDir, existing.id);
+        const old = `${dir}.old-${randomUUID()}`;
+        await rename(dir, old);
+        try {
+          await rename(work, dir);
+        } catch (err) {
+          await rename(old, dir).catch(() => {});
+          throw err;
+        }
+        await rm(old, { recursive: true, force: true }).catch(() => {});
+        this.store.updateExtension(existing.id, { name: meta.name, version: meta.version });
+        this.emit('change', '');
+        return this.store.getExtension(existing.id)!;
+      }
+      const id = randomUUID();
+      const dir = join(this.extensionsDir, id);
+      await rename(work, dir);
+      let ext: Extension;
+      try {
+        ext = this.store.createExtension({ id, name: meta.name, version: meta.version, path: dir });
+      } catch (err) {
+        await rm(dir, { recursive: true, force: true }).catch(() => {});
+        throw err;
+      }
+      this.emit('change', '');
+      return ext;
+    } finally {
+      await rm(zip, { force: true }).catch(() => {});
+      await rm(work, { recursive: true, force: true }).catch(() => {});
+    }
   }
 
   listExtensions(): Extension[] {

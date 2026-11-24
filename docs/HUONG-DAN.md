@@ -21,10 +21,11 @@ Browser Fingerprint quản lý nhiều **hồ sơ trình duyệt** tách biệt 
 7. [Nhóm](#7-nhóm)
 8. [Nhập và xuất cookie](#8-nhập-và-xuất-cookie)
 9. [Extension (ví crypto và các extension khác)](#9-extension-ví-crypto-và-các-extension-khác)
-10. [Tự động hoá: Playwright, lệnh bf, trợ lý AI](#10-tự-động-hoá-playwright-lệnh-bf-trợ-lý-ai)
-11. [Mẹo để không bị lộ](#11-mẹo-để-không-bị-lộ)
-12. [Dữ liệu nằm ở đâu, sao lưu thế nào](#12-dữ-liệu-nằm-ở-đâu-sao-lưu-thế-nào)
-13. [Câu hỏi thường gặp](#13-câu-hỏi-thường-gặp)
+10. [Tự giải captcha bằng CapMonster](#10-tự-giải-captcha-bằng-capmonster)
+11. [Tự động hoá: Playwright, lệnh bf, trợ lý AI](#11-tự-động-hoá-playwright-lệnh-bf-trợ-lý-ai)
+12. [Mẹo để không bị lộ](#12-mẹo-để-không-bị-lộ)
+13. [Dữ liệu nằm ở đâu, sao lưu thế nào](#13-dữ-liệu-nằm-ở-đâu-sao-lưu-thế-nào)
+14. [Câu hỏi thường gặp](#14-câu-hỏi-thường-gặp)
 
 ---
 
@@ -218,7 +219,25 @@ Trang **Extension** là thư viện dùng chung.
 
 > App không kiểm chữ ký của file `.crx`. Chỉ thêm extension từ nguồn bạn tin, nhất là extension ví.
 
-## 10. Tự động hoá: Playwright, lệnh bf, trợ lý AI
+## 10. Tự giải captcha bằng CapMonster
+
+App tích hợp sẵn [CapMonster Cloud](https://capmonster.cloud), dịch vụ giải captcha trả phí (reCAPTCHA, Cloudflare Turnstile, GeeTest, captcha chữ…). Bạn cần tự tạo tài khoản và nạp tiền trên trang của họ để có **API key**.
+
+**Cài một lần**, ở trang **Cài đặt** → thẻ **CapMonster (giải captcha)**:
+1. Dán API key vào ô **API key** rồi bấm **Lưu**. App mã hoá key và không bao giờ hiện lại; ngay sau khi lưu, app kiểm tra key với CapMonster và hiện số dư (hoặc báo lỗi nếu key sai).
+2. Bấm **Cài extension**. App tải extension chính thức của CapMonster theo link trong tài liệu của họ và đưa vào thư viện extension. Bấm **Cập nhật extension** khi muốn lên bản mới; việc gán cho nhóm/hồ sơ và thiết lập của extension trong từng hồ sơ được giữ nguyên.
+3. Gán extension **CapMonster Cloud** cho nhóm (trang **Extension**) hoặc cho từng hồ sơ, như mọi extension khác.
+
+**Khi dùng:** mỗi lần mở hồ sơ, app tự nạp key vào extension, nên bạn không phải gõ key trong từng hồ sơ. Gặp captcha thì extension tự giải. Bật/tắt từng loại captcha trong cửa sổ của extension (biểu tượng CapMonster trên thanh công cụ).
+
+Lưu ý:
+- Đổi hoặc xoá key trong Cài đặt có hiệu lực từ lần mở hồ sơ sau. Hồ sơ nào bạn **tự gõ key** trong cửa sổ extension thì extension dùng key đó thay vì key của app.
+- Mỗi lần giải đều trừ tiền trong tài khoản CapMonster của bạn.
+- Nếu app không tự tải được extension (CapMonster đổi link), tải file zip theo hướng dẫn trên docs.capmonster.cloud rồi thêm ở trang Extension bằng **Thêm file .crx/.zip…**; app vẫn tự nạp key cho nó.
+
+**Cho script tự động hoá:** lệnh `bf captcha balance` và `bf captcha solve '<task JSON>'`, công cụ MCP `captcha_balance`, `solve_captcha`, và REST `GET /v1/captcha/balance`, `POST /v1/captcha/solve`. Script không cần biết key; app gọi CapMonster bằng key đã lưu. Định dạng task theo tài liệu API của CapMonster (xem [README](../README.md)).
+
+## 11. Tự động hoá: Playwright, lệnh bf, trợ lý AI
 
 Khi app đang mở, nó chạy một **API cục bộ** tại `http://127.0.0.1:47800`, chỉ máy bạn gọi được. Trang **Cài đặt** cho biết địa chỉ và có nút **Hiện file token**.
 
@@ -228,7 +247,7 @@ Ba cách dùng:
 
 - **Playwright / Puppeteer:** khởi động hồ sơ qua API để lấy địa chỉ CDP (`ws://127.0.0.1:…`), rồi nối vào bằng `chromium.connectOverCDP(địa_chỉ)`.
 - **Lệnh `bf`** trong Terminal. Ví dụ `pnpm bf list` để liệt kê hồ sơ, hoặc `pnpm bf start <mã> --headless` để chạy ẩn và in địa chỉ CDP.
-- **Trợ lý AI** (Claude Code và các trợ lý hỗ trợ MCP): 12 công cụ để tạo, khởi động, dừng hồ sơ và nhập, xuất cookie.
+- **Trợ lý AI** (Claude Code và các trợ lý hỗ trợ MCP): 14 công cụ để tạo, khởi động, dừng hồ sơ, nhập, xuất cookie và giải captcha qua CapMonster.
 
 Cách cài và ví dụ đầy đủ nằm trong [README](../README.md), mục "API cục bộ, CLI và MCP".
 
@@ -237,7 +256,7 @@ Lưu ý an toàn:
 - **Địa chỉ CDP của hồ sơ đang chạy không có mật khẩu:** chương trình nào trên máy cũng nối vào được trong lúc hồ sơ chạy.
 - **Chỉ gắn MCP vào trợ lý AI bạn tin:** nó xoá được hồ sơ và gỡ được proxy.
 
-## 11. Mẹo để không bị lộ
+## 12. Mẹo để không bị lộ
 
 - **Một hồ sơ, một proxy.** Đừng cho hai tài khoản cùng nền tảng dùng chung proxy.
 - **Múi giờ và ngôn ngữ khớp với proxy.** Proxy Nhật mà múi giờ Việt Nam là dấu hiệu bất thường. Dùng nút "Dùng múi giờ của proxy", hoặc "Múi giờ theo proxy" khi sửa hàng loạt.
@@ -249,7 +268,7 @@ Lưu ý an toàn:
 
 Nhiều nền tảng cấm dùng nhiều tài khoản trong điều khoản dịch vụ; việc tuân thủ là trách nhiệm của bạn.
 
-## 12. Dữ liệu nằm ở đâu, sao lưu thế nào
+## 13. Dữ liệu nằm ở đâu, sao lưu thế nào
 
 Mọi thứ (danh sách hồ sơ, proxy, dữ liệu trình duyệt từng hồ sơ, extension, nhân) nằm trong:
 
@@ -261,7 +280,7 @@ Sao lưu: **thoát app** rồi chép cả thư mục này.
 - Mật khẩu proxy được mã hoá bằng kho khoá của chính máy đó. Chép sang máy khác thì phải nhập lại mật khẩu proxy.
 - Gỡ app không xoá thư mục này. Muốn xoá sạch thì xoá thư mục bằng tay.
 
-## 13. Câu hỏi thường gặp
+## 14. Câu hỏi thường gặp
 
 **Bấm khởi động thì báo "Proxy … không kết nối được".**
 Proxy đang chết hoặc sai địa chỉ, tài khoản. Vào trang Proxy bấm kiểm tra để xem lý do, rồi đổi proxy cho hồ sơ.

@@ -41,7 +41,8 @@ export interface LauncherDeps {
   profilesDir: string;
   secrets: SecretBox;
   /** Thư mục các extension cần nạp cho hồ sơ. Được ném LaunchError để chặn khởi chạy. */
-  extensionDirs?: (profileId: string) => string[];
+  /** Có thể bất đồng bộ: lõi chuẩn bị file của extension (ví dụ ghi key CapMonster) trước khi trả đường dẫn. */
+  extensionDirs?: (profileId: string) => string[] | Promise<string[]>;
   spawnImpl?: typeof spawn;
   openBridge?: (u: Upstream) => Promise<BridgeLike>;
   checkReachable?: (host: string, port: number) => Promise<void>;
@@ -188,7 +189,7 @@ export class Launcher extends EventEmitter {
         '--no-default-browser-check',
       ];
       if (opts.headless) args.push('--headless=new');
-      const extDirs = this.deps.extensionDirs?.(profileId) ?? [];
+      const extDirs = (await this.deps.extensionDirs?.(profileId)) ?? [];
       // Nhân tách danh sách bằng dấu phẩy; đường dẫn có dấu phẩy làm nhân treo lúc khởi động.
       if (extDirs.some((d) => d.includes(','))) throw new LaunchError('Đường dẫn extension chứa dấu phẩy nên nhân không nạp được');
       if (extDirs.length > 0) args.push(`--load-extension=${extDirs.join(',')}`);

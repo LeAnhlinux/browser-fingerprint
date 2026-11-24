@@ -1,6 +1,7 @@
 import type { CoreInfo } from '@bf/core'
 import { IconFolderOpen } from '@tabler/icons-react'
 import { api, type ApiStatus } from '../api'
+import { CapMonsterCard } from '../CapMonsterCard'
 import { Banner } from '../ui'
 
 interface Props {
@@ -83,6 +84,8 @@ export function SettingsPage({ info, apiInfo }: Props): React.JSX.Element {
           </>
         )}
       </div>
+
+      <CapMonsterCard />
     </div>
   )
 }

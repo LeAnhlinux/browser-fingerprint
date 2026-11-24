@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { hostDefaults } from '../src/fingerprint';
 import { ProfileStore } from '../src/store';
 
-const MIGRATION_COUNT = 4;
+const MIGRATION_COUNT = 5;
 let store: ProfileStore;
 beforeEach(() => { store = new ProfileStore(':memory:'); });
 

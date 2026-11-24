@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { type IncomingMessage, type ServerResponse, createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { CookieImportResult, CoreInfo, FingerprintSnapshot, Group, Profile, ProfileFilter, ProfileInput, ProfileUpdate, ProfileView, ProxyView, RunInfo } from '@bf/core';
+import type { CookieImportResult, CoreInfo, FingerprintSnapshot, Group, Profile, ProfileFilter, ProfileInput, ProfileUpdate, ProfileView, ProxyView, RunInfo, SolveResult } from '@bf/core';
 import { DEFAULT_PORT } from './token';
 
 /** Những gì máy chủ cần ở lõi. Đối tượng Core thật thoả mãn giao diện này. */
@@ -21,6 +21,8 @@ export interface ApiCore {
   listGroups(): Group[];
   listProxies(): ProxyView[];
   checkProxy(id: string): Promise<ProxyView>;
+  capmonsterBalance(): Promise<number>;
+  solveCaptcha(task: unknown, timeoutMs?: number): Promise<SolveResult>;
 }
 
 export interface ApiServerOptions {
@@ -202,6 +204,13 @@ function buildRoutes(core: ApiCore): Route[] {
     route('GET', 'groups', () => core.listGroups()),
     route('GET', 'proxies', () => core.listProxies()),
     route('POST', `proxies/${ID}/check`, ({ id }) => core.checkProxy(id)),
+    route('GET', 'captcha/balance', async () => ({ balance: await core.capmonsterBalance() })),
+    route('POST', 'captcha/solve', ({ body }) => {
+      if (!isRecord(body) || Object.keys(body).some((k) => k !== 'task' && k !== 'timeoutMs')) {
+        throw new HttpError(400, 'Thân yêu cầu phải là { "task": {...}, "timeoutMs"?: số }');
+      }
+      return core.solveCaptcha(body.task, body.timeoutMs as number | undefined);
+    }),
   ];
 }
 

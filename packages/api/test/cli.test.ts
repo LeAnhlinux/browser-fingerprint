@@ -46,6 +46,21 @@ const run = async (...argv: string[]): Promise<number> => {
 };
 
 describe('bf', () => {
+  it('captcha balance và solve (JSON trên dòng lệnh hoặc @file, --timeout theo giây)', async () => {
+    expect(await run('captcha', 'balance')).toBe(0);
+    expect(out).toEqual(['Số dư CapMonster: $4.25']);
+    expect(await run('captcha', 'solve', '{"type":"TurnstileTask","websiteURL":"https://a.example","websiteKey":"k"}', '--timeout', '60')).toBe(0);
+    expect(core.calls.at(-1)).toEqual(['solveCaptcha', { type: 'TurnstileTask', websiteURL: 'https://a.example', websiteKey: 'k' }, 60_000]);
+    expect(JSON.parse(out.join('\n'))).toEqual({ token: 'TOKEN-GIAI' });
+    files.set('task.json', '{"type":"ImageToTextTask","body":"abc"}');
+    expect(await run('captcha', 'solve', '@task.json', '--json')).toBe(0);
+    expect(JSON.parse(out.join('\n'))).toMatchObject({ taskId: 9, cost: 0.001 });
+    expect(await run('captcha', 'solve', '{khong-phai-json')).toBe(2);
+    expect(await run('captcha', 'solve', '{"type":"X"}', '--timeout', 'abc')).toBe(2);
+    expect(await run('captcha', 'solve', '{}')).toBe(1);
+    expect(err[0]).toContain('trường "type"');
+  });
+
   it('create in mã hồ sơ; list in mỗi hồ sơ một dòng cách nhau bằng tab', async () => {
     expect(await run('create', 'IG-01', '--group', 'g1', '--timezone', 'Asia/Tokyo')).toBe(0);
     expect(out).toEqual(['p1']);

@@ -268,6 +268,34 @@ const TOOLS: Tool[] = [
     inputSchema: { type: 'object', properties: { id: { type: 'string', description: 'Mã proxy (xem list_proxies)' } }, required: ['id'], additionalProperties: false },
     run: (args, { client }) => client.checkProxy(str(args, 'id')),
   },
+  {
+    name: 'captcha_balance',
+    description: 'Xem số dư tài khoản CapMonster Cloud (USD). API key được nhập trong app (Cài đặt → CapMonster), công cụ không bao giờ trả key.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: READ_ONLY,
+    run: (_args, { client }) => client.captchaBalance(),
+  },
+  {
+    name: 'solve_captcha',
+    description:
+      'Giải một captcha qua CapMonster Cloud (tốn tiền trong tài khoản CapMonster của người dùng) và trả về lời giải (token hoặc chữ) cùng chi phí. ' +
+      'task theo đúng định dạng API createTask của CapMonster, ví dụ {"type":"RecaptchaV2Task","websiteURL":"...","websiteKey":"..."} hoặc TurnstileTask, ImageToTextTask...',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task: { type: 'object', description: 'Object task theo tài liệu CapMonster, bắt buộc có trường type' },
+        timeoutSeconds: { type: 'integer', description: 'Thời gian chờ tối đa, 10-280 giây (mặc định 120)' },
+      },
+      required: ['task'],
+      additionalProperties: false,
+    },
+    run: (args, { client }) => {
+      if (!isRecord(args.task)) throw new ToolError('Thiếu tham số: task (đối tượng)');
+      const seconds = args.timeoutSeconds;
+      if (seconds !== undefined && (typeof seconds !== 'number' || !Number.isInteger(seconds))) throw new ToolError('timeoutSeconds phải là số nguyên');
+      return client.solveCaptcha(args.task, seconds === undefined ? undefined : seconds * 1000);
+    },
+  },
 ];
 
 export const TOOL_NAMES: string[] = TOOLS.map((t) => t.name);

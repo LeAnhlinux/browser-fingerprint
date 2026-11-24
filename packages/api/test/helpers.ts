@@ -76,6 +76,15 @@ export function fakeCore(): FakeCore {
       if (id !== 'x1') throw new Error('Không tìm thấy proxy');
       return { ...proxy(), lastStatus: 'ok', lastIp: '1.2.3.4', lastCountry: 'US', lastTimezone: 'America/Chicago', lastCheckedAt: 1 } as ProxyView;
     },
+    capmonsterBalance: async () => {
+      core.calls.push(['capmonsterBalance']);
+      return 4.25;
+    },
+    solveCaptcha: async (task, timeoutMs) => {
+      core.calls.push(['solveCaptcha', task, timeoutMs]);
+      if (!task || typeof task !== 'object' || !('type' in task)) throw new Error('task phải là một đối tượng có trường "type"');
+      return { taskId: 9, solution: { token: 'TOKEN-GIAI' }, cost: 0.001 };
+    },
   };
   return core;
 }

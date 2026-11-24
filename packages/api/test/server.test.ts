@@ -210,6 +210,20 @@ describe('máy chủ API: đường dẫn', () => {
     expect(await http(port, 'POST', '/v1/proxies/zz/check')).toMatchObject({ status: 404, json: { error: 'Không tìm thấy proxy' } });
   });
 
+  it('captcha: số dư; giải nhận task và timeoutMs, thân sai dạng bị từ chối', async () => {
+    expect(await http(port, 'GET', '/v1/captcha/balance')).toMatchObject({ status: 200, json: { balance: 4.25 } });
+    const task = { type: 'RecaptchaV2Task', websiteURL: 'https://a.example', websiteKey: 'k' };
+    expect(await http(port, 'POST', '/v1/captcha/solve', { body: { task, timeoutMs: 30_000 } })).toMatchObject({
+      status: 200,
+      json: { taskId: 9, solution: { token: 'TOKEN-GIAI' }, cost: 0.001 },
+    });
+    expect(core.calls.at(-1)).toEqual(['solveCaptcha', task, 30_000]);
+    for (const body of [[], 'x', { task, khac: 1 }]) {
+      expect((await http(port, 'POST', '/v1/captcha/solve', { body })).status, JSON.stringify(body)).toBe(400);
+    }
+    expect(await http(port, 'POST', '/v1/captcha/solve', { body: { task: {} } })).toMatchObject({ status: 400, json: { error: 'task phải là một đối tượng có trường "type"' } });
+  });
+
   it('mã trong đường dẫn được giải mã phần trăm; mã hoá hỏng thì 400', async () => {
     expect(await http(port, 'GET', '/v1/profiles/%E0%A4%A')).toMatchObject({ status: 400, json: { error: 'Mã không hợp lệ' } });
     expect(await http(port, 'GET', '/v1/profiles/a%20b')).toMatchObject({ status: 404 });

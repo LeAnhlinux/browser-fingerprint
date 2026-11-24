@@ -44,6 +44,7 @@ const MIGRATIONS = [
    ALTER TABLE profile ADD COLUMN screen_scale REAL;
    ALTER TABLE profile ADD COLUMN fp_key TEXT;
    ALTER TABLE profile ADD COLUMN fp_snapshot TEXT;`,
+  `CREATE TABLE setting (key TEXT PRIMARY KEY, value TEXT NOT NULL);`,
 ];
 
 const PROFILE_COLS: Record<keyof ProfilePatch, string> = {
@@ -291,6 +292,20 @@ export class ProfileStore {
 
   listExtensions(): Extension[] {
     return (this.db.prepare('SELECT * FROM extension ORDER BY created_at, rowid').all() as Row[]).map(toExtension);
+  }
+
+  updateExtension(id: string, patch: { name: string; version: string }): void {
+    this.db.prepare('UPDATE extension SET name = ?, version = ? WHERE id = ?').run(patch.name, patch.version, id);
+  }
+
+  getSetting(key: string): string | null {
+    const r = this.db.prepare('SELECT value FROM setting WHERE key = ?').get(key) as Row | undefined;
+    return r ? (r.value as string) : null;
+  }
+
+  setSetting(key: string, value: string | null): void {
+    if (value === null) this.db.prepare('DELETE FROM setting WHERE key = ?').run(key);
+    else this.db.prepare('INSERT INTO setting (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
   }
 
   deleteExtension(id: string): void {

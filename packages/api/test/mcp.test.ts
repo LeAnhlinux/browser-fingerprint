@@ -73,6 +73,7 @@ describe('MCP: giao thức', () => {
     expect(TOOL_NAMES).toEqual([
       'list_profiles', 'get_profile', 'create_profile', 'update_profile', 'delete_profile', 'start_profile',
       'stop_profile', 'import_cookies', 'export_cookies', 'list_groups', 'list_proxies', 'check_proxy',
+      'captcha_balance', 'solve_captcha',
     ]);
     for (const t of tools) {
       expect(typeof t.description, t.name).toBe('string');
@@ -229,6 +230,15 @@ describe('MCP: công cụ', () => {
     expect(await call('check_proxy', { id: 'zz' })).toMatchObject({ isError: true, text: 'Không tìm thấy proxy' });
   });
 
+  it('CapMonster: số dư và giải captcha, thời gian đổi sang mili giây', async () => {
+    expect((await call('captcha_balance')).data).toEqual({ balance: 4.25 });
+    const task = { type: 'TurnstileTask', websiteURL: 'https://a.example', websiteKey: 'k' };
+    expect((await call('solve_captcha', { task, timeoutSeconds: 60 })).data).toEqual({ taskId: 9, solution: { token: 'TOKEN-GIAI' }, cost: 0.001 });
+    expect(core.calls.at(-1)).toEqual(['solveCaptcha', task, 60_000]);
+    expect(await call('solve_captcha', { task: 'x' })).toMatchObject({ isError: true, text: 'Thiếu tham số: task (đối tượng)' });
+    expect(await call('solve_captcha', { task, timeoutSeconds: 1.5 })).toMatchObject({ isError: true, text: 'timeoutSeconds phải là số nguyên' });
+  });
+
   it('app không mở: công cụ báo lỗi có hướng dẫn, server vẫn sống', async () => {
     await server.close();
     const res = await call('list_profiles');
@@ -256,7 +266,7 @@ describe('MCP: stdio', () => {
     const replies = lines.map((l) => JSON.parse(l));
     expect(replies.map((r) => r.id)).toEqual([1, null, 2]);
     expect(replies[1].error).toMatchObject({ code: -32700 });
-    expect(replies[2].result.tools).toHaveLength(12);
+    expect(replies[2].result.tools).toHaveLength(TOOL_NAMES.length);
     expect(lines.every((l) => !l.includes('\n'))).toBe(true);
   });
 });

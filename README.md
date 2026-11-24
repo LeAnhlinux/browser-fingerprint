@@ -86,6 +86,8 @@ Giới hạn: chưa tải extension thẳng từ Chrome Web Store, chưa tự c�
 | `POST /v1/profiles/:id/cookies` | Nhập cookie (thân `{"text": "..."}` hoặc `{"cookies": [...]}`) |
 | `GET /v1/groups`, `GET /v1/proxies` | Liệt kê nhóm, proxy |
 | `POST /v1/proxies/:id/check` | Kiểm tra proxy |
+| `GET /v1/captcha/balance` | Số dư CapMonster (key nhập trong app: Cài đặt → CapMonster) |
+| `POST /v1/captcha/solve` | Giải captcha qua CapMonster: thân `{"task": {...}, "timeoutMs": 120000}`; trả `{taskId, solution, cost}` |
 
 ```sh
 T=$(cat "$HOME/Library/Application Support/Browser Fingerprint/api-token")
@@ -106,6 +108,7 @@ const browser = await chromium.connectOverCDP(cdpUrl);
 - `start <mã> [--headless]` (in địa chỉ CDP), `stop <mã>`
 - `cookies export <mã> [-o <file>]`, `cookies import <mã> <file>`. Không có `-o`, `cookies export` in phiên đăng nhập (cookie) ra terminal; nên dùng `-o` (file chỉ chủ máy đọc được, quyền 0600)
 - `groups`, `proxies`, `proxy check <mã proxy>`
+- `captcha balance`, `captcha solve '<task JSON>'|@file [--timeout <giây>]` (in lời giải)
 - `--json` để in JSON, `--help` để xem đầy đủ tuỳ chọn
 
 ```sh
@@ -118,7 +121,7 @@ CDP=$(pnpm -s bf start <mã> --headless)
 claude mcp add browser-fingerprint -- node <đường dẫn tuyệt đối tới kho>/packages/api/dist/mcp-main.js
 ```
 
-12 công cụ: `list_profiles`, `get_profile`, `create_profile`, `update_profile`, `delete_profile`, `start_profile`, `stop_profile`, `import_cookies`, `export_cookies`, `list_groups`, `list_proxies`, `check_proxy`. `delete_profile` xoá vĩnh viễn hồ sơ và dữ liệu của nó; `update_profile` đổi được cả `proxyId`. Cả hai nằm trong tầm tay của trợ lý nào bạn gắn MCP vào.
+14 công cụ: `list_profiles`, `get_profile`, `create_profile`, `update_profile`, `delete_profile`, `start_profile`, `stop_profile`, `import_cookies`, `export_cookies`, `list_groups`, `list_proxies`, `check_proxy`, `captcha_balance`, `solve_captcha`. `delete_profile` xoá vĩnh viễn hồ sơ và dữ liệu của nó; `update_profile` đổi được cả `proxyId`. Cả hai nằm trong tầm tay của trợ lý nào bạn gắn MCP vào.
 
 Về cookie và độ tin cậy: kết quả của công cụ MCP không bao giờ chứa giá trị cookie. Nhưng `cdpUrl` (do `list_profiles`, `get_profile`, `start_profile` trả về) cho phép ai cầm nó điều khiển hoàn toàn trình duyệt của hồ sơ đó và đọc cookie của nó, nên chỉ gắn MCP server này vào trợ lý bạn tin tưởng. Địa chỉ CDP của một hồ sơ đang chạy không có xác thực: mọi tiến trình trên máy đều nối được vào nó trong lúc hồ sơ chạy (điều này đúng từ giai đoạn 1, dù có dùng API hay không).
 
@@ -127,6 +130,19 @@ Về cookie và độ tin cậy: kết quả của công cụ MCP không bao gi�
 **Biến môi trường.** `BF_API=0` tắt API khi mở app; `BF_API_PORT` đổi cổng (app, CLI và MCP phải dùng cùng cổng); `BF_API_TOKEN_FILE` trỏ CLI và MCP tới file token khác; `BF_MCP_FILE_DIR` đổi thư mục file của MCP. Nếu cổng đã bị chương trình khác dùng, app vẫn mở bình thường và báo lỗi ở cuối cửa sổ.
 
 Giới hạn: không có HTTPS (chỉ nghe trên 127.0.0.1), một token cho mọi quyền, API không tạo, sửa, xoá nhóm, proxy hay extension, chưa thử trên Windows.
+
+## CapMonster (giải captcha)
+
+API key nhập ở trang Cài đặt, lưu mã hoá trong cơ sở dữ liệu của app; không route, lệnh hay công cụ nào trả key ra.
+
+- **Trong hồ sơ:** nút "Cài extension" tải gói extension Chrome chính thức (`https://zenno.link/chrome-actual-build`, hiện dẫn tới Google Drive) vào thư viện extension. Extension được nhận ra theo nội dung (tên có "CapMonster" và có `defaultSettings.json`), nên gói thêm tay cũng được. Mỗi lần mở hồ sơ có gán extension này, app ghi key vào `clientKey` trong `defaultSettings.json` của nó (cách CapMonster hướng dẫn cho tự động hoá). Extension đọc file này mỗi lần khởi động, nhưng giá trị người dùng tự lưu trong popup (storage của hồ sơ) được ưu tiên hơn.
+- **Cho script:** `solve` gọi `createTask`, rồi hỏi `getTaskResult` mỗi 3 giây, chờ mặc định 120 giây (10–280). `task` truyền nguyên theo [tài liệu API của CapMonster](https://docs.capmonster.cloud/docs/api/methods/create-task), ví dụ:
+
+```sh
+pnpm bf captcha solve '{"type":"TurnstileTask","websiteURL":"https://example.com","websiteKey":"0x4AAAA..."}'
+```
+
+Giới hạn: lệnh gọi API CapMonster đi bằng IP thật của máy (không qua proxy của hồ sơ; task nào cần proxy thì tự điền các trường proxy trong task); key nằm dạng chữ trong `defaultSettings.json` trong thư mục extension của app (xoá key trong Cài đặt thì app xoá luôn ở đó); gói tải về chỉ được kiểm là zip có đúng tên và file cài đặt của CapMonster, không kiểm chữ ký hay mã băm; tối đa 10 lượt giải chạy cùng lúc; gói extension của CapMonster không nằm trong repo.
 
 ## Giới hạn đã biết
 

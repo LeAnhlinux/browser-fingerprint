@@ -28,6 +28,10 @@ const USAGE = `Cách dùng: bf <lệnh> [tuỳ chọn]
   groups
   proxies
   proxy check <mã proxy>
+  captcha balance                    số dư CapMonster (key nhập trong app: Cài đặt → CapMonster)
+  captcha solve <task JSON|@file> [--timeout <giây>]
+                                     giải captcha qua CapMonster; task theo tài liệu API CapMonster,
+                                     ví dụ '{"type":"TurnstileTask","websiteURL":"...","websiteKey":"..."}'
 
 Tuỳ chọn chung: --json (in JSON), -h/--help
 App Browser Fingerprint phải đang mở. Biến môi trường: BF_API_PORT, BF_API_TOKEN_FILE.`;
@@ -47,6 +51,7 @@ const OPTIONS = {
   'accept-lang': { type: 'string' },
   notes: { type: 'string' },
   output: { type: 'string', short: 'o' },
+  timeout: { type: 'string' },
 } as const;
 
 type Values = { [K in keyof typeof OPTIONS]?: string | boolean };
@@ -189,6 +194,37 @@ async function dispatch(positionals: string[], v: Values, io: CliIo): Promise<vo
       need(args, 2);
       const checked = await client.checkProxy(args[1]);
       return json ? print(checked) : io.out(proxyLine(checked));
+    }
+    case 'captcha': {
+      if (args[0] === 'balance') {
+        need(args, 1);
+        const { balance } = await client.captchaBalance();
+        return json ? print({ balance }) : io.out(`Số dư CapMonster: $${balance}`);
+      }
+      if (args[0] !== 'solve') throw new UsageError('Lệnh captcha cần balance hoặc solve');
+      need(args, 2);
+      let text = args[1];
+      if (text.startsWith('@')) {
+        try {
+          text = await io.readFile(text.slice(1));
+        } catch {
+          throw new ApiError(`Không đọc được file ${text.slice(1)}`, 0);
+        }
+      }
+      let task: unknown;
+      try {
+        task = JSON.parse(text);
+      } catch {
+        throw new UsageError('task phải là JSON hợp lệ');
+      }
+      let timeoutMs: number | undefined;
+      if (typeof v.timeout === 'string') {
+        const seconds = Number(v.timeout);
+        if (!Number.isInteger(seconds) || seconds <= 0) throw new UsageError('--timeout phải là số giây nguyên dương');
+        timeoutMs = seconds * 1000;
+      }
+      const r = await client.solveCaptcha(task, timeoutMs);
+      return json ? print(r) : io.out(JSON.stringify(r.solution, null, 2));
     }
     default:
       throw new UsageError(`Không có lệnh: ${String(command).slice(0, 40)}`);

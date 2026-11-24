@@ -1,4 +1,4 @@
-import type { CookieImportResult, CoreInfo, Group, ProfileInput, ProfileUpdate, ProfileView, ProxyView, RunInfo } from '@bf/core';
+import type { CookieImportResult, CoreInfo, Group, ProfileInput, ProfileUpdate, ProfileView, ProxyView, RunInfo, SolveResult } from '@bf/core';
 import { DEFAULT_PORT, defaultDataDir, readToken, tokenPath } from './token';
 
 export class ApiError extends Error {
@@ -20,6 +20,8 @@ export interface ApiClientOptions {
 }
 
 const REQUEST_TIMEOUT_MS = 120_000;
+/** Bằng thời gian giải mặc định của lõi (chỉ import kiểu từ @bf/core để CLI không kéo theo cả lõi). */
+const SOLVE_TIMEOUT_DEFAULT_MS = 120_000;
 const TIMED_OUT = 'App không trả lời kịp thời gian';
 const BAD_REPLY = 'Máy chủ API trả lời không hợp lệ';
 const NOT_RUNNING = 'Không kết nối được tới app. Hãy mở Browser Fingerprint trước (API chỉ chạy khi app đang mở).';
@@ -39,7 +41,7 @@ export class ApiClient {
     this.timeoutMs = opts.timeoutMs ?? REQUEST_TIMEOUT_MS;
   }
 
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  private async request<T>(method: string, path: string, body?: unknown, timeoutMs = this.timeoutMs): Promise<T> {
     let token: string;
     try {
       token = typeof this.token === 'function' ? this.token() : this.token;
@@ -47,7 +49,7 @@ export class ApiClient {
       throw new ApiError(err instanceof Error ? err.message : 'Không đọc được token của API', 0);
     }
     // Token chỉ gửi tới đúng địa chỉ này: không theo chuyển hướng, không chờ vô hạn.
-    const signal = AbortSignal.timeout(this.timeoutMs);
+    const signal = AbortSignal.timeout(timeoutMs);
     let res: Response;
     try {
       res = await fetch(`${this.base}${path}`, {
@@ -132,6 +134,17 @@ export class ApiClient {
 
   checkProxy(id: string): Promise<ProxyView> {
     return this.request('POST', `/proxies/${encodeURIComponent(id)}/check`);
+  }
+
+  captchaBalance(): Promise<{ balance: number }> {
+    return this.request('GET', '/captcha/balance');
+  }
+
+  /** Giải captcha qua CapMonster bằng key lưu trong app; task theo định dạng API CapMonster. */
+  solveCaptcha(task: unknown, timeoutMs?: number): Promise<SolveResult> {
+    // Chờ dư hơn thời gian giải để app (luôn dừng trong timeoutMs) kịp trả lỗi hết giờ của chính nó.
+    const wait = Math.max(this.timeoutMs, (timeoutMs ?? SOLVE_TIMEOUT_DEFAULT_MS) + 30_000);
+    return this.request('POST', '/captcha/solve', timeoutMs === undefined ? { task } : { task, timeoutMs }, wait);
   }
 }
 
