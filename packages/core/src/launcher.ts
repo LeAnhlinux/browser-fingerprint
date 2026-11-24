@@ -1,11 +1,14 @@
 import { type ChildProcess, execFile, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import net from 'node:net';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { type ScreenSpec, fingerprintArgs, profileScreen, screenArgs } from './fingerprint';
-import { type ScreenKeeper, startScreenKeeper } from './screen-keeper';
+import { fingerprintArgs, profileScreen, screenArgs } from './fingerprint';
+import { type PageKeeper, type PageSpec, startPageKeeper } from './page-keeper';
 import { ProxyBridge, type Upstream, assertReachable } from './proxy-bridge';
+import { checkProxy } from './proxy-checker';
+import { webrtcSpoofScript } from './webrtc-spoof';
 import type { ProfileStore } from './store';
 import type { SecretBox } from './types';
 
@@ -53,13 +56,20 @@ export interface LauncherDeps {
   killAfterMs?: number;
   /** Đếm tab đang mở qua cổng CDP; null khi không hỏi được. */
   countPages?: (cdpPort: number) => Promise<number | null>;
-  /** Mở kết nối giữ màn hình giả cho mọi tab. */
-  keepScreen?: (cdpUrl: string, screen: ScreenSpec) => Promise<ScreenKeeper>;
+  /** Mở kết nối giữ màn hình giả và script giả WebRTC cho mọi tab. */
+  keepPages?: (cdpUrl: string, spec: PageSpec) => Promise<PageKeeper>;
+  /** IP ra ngoài của proxy, tra qua chính proxy; null khi không tra được. */
+  lookupExitIp?: (u: Upstream) => Promise<string | null>;
   /** Chu kỳ kiểm tra cửa sổ (ms). 0 thì tắt: đóng hết cửa sổ không dừng hồ sơ. */
   windowWatchMs?: number;
 }
 
 /** Số tab thường (không tính DevTools, extension nền) mà nhân đang mở. */
+async function defaultLookupExitIp(u: Upstream): Promise<string | null> {
+  const r = await checkProxy(u, { timeoutMs: 5000 });
+  return r.ok ? r.ip : null;
+}
+
 export async function cdpCountPages(cdpPort: number): Promise<number | null> {
   try {
     const res = await fetch(`http://127.0.0.1:${cdpPort}/json/list`, { signal: AbortSignal.timeout(2000) });
@@ -171,7 +181,8 @@ export class Launcher extends EventEmitter {
     this.starting.add(profileId);
     let bridge: BridgeLike | null = null;
     let child: ChildProcess | null = null;
-    let keeper: ScreenKeeper | null = null;
+    let keeper: PageKeeper | null = null;
+    let exitIp: Promise<string | null> = Promise.resolve(null);
     const abort = new AbortController();
     try {
       const profile = this.deps.store.getProfile(profileId);
@@ -202,14 +213,21 @@ export class Launcher extends EventEmitter {
           throw new LaunchError(`Proxy ${proxy.host}:${proxy.port} không kết nối được`);
         }
         const open = this.deps.openBridge ?? ((u: Upstream) => ProxyBridge.open(u));
-        bridge = await open({
+        const upstream: Upstream = {
           protocol: proxy.protocol,
           host: proxy.host,
           port: proxy.port,
           username: proxy.username,
           password: proxy.passwordEncrypted ? this.deps.secrets.decrypt(proxy.passwordEncrypted) : null,
-        });
+        };
+        bridge = await open(upstream);
         args.push(`--proxy-server=${bridge.url}`);
+        // Tra IP ra ngoài của proxy song song với lúc nhân khởi động, để WebRTC giả hiện đúng IP này
+        // (kể cả proxy xoay IP). Tra không được thì dùng IP của lần kiểm tra gần nhất.
+        const lastIp = proxy.lastIp && net.isIP(proxy.lastIp) !== 0 ? proxy.lastIp : null;
+        exitIp = (this.deps.lookupExitIp ?? defaultLookupExitIp)(upstream)
+          .then((ip) => (ip && net.isIP(ip) !== 0 ? ip : lastIp))
+          .catch(() => lastIp);
       }
       // Chỉ tạo thư mục dữ liệu sau khi các kiểm tra proxy đã qua.
       await mkdir(dir, { recursive: true });
@@ -242,12 +260,16 @@ export class Launcher extends EventEmitter {
         startedAt: Date.now(),
         headless: opts.headless === true,
       };
-      // Giả màn hình thất bại thì không chạy, như proxy: thà không mở còn hơn lộ màn hình thật.
-      if (screen) {
+      // Không có IP proxy thì không giả WebRTC: nhân vẫn chặn UDP nên trang không thấy IP nào, không lộ IP thật.
+      const ip = await exitIp;
+      const script = ip ? webrtcSpoofScript(ip) : null;
+      // Gắn vào tab thất bại thì không chạy, như proxy: thà không mở còn hơn lộ màn hình thật.
+      if (screen || script) {
         try {
-          keeper = await (this.deps.keepScreen ?? startScreenKeeper)(info.cdpUrl, screen);
+          keeper = await (this.deps.keepPages ?? startPageKeeper)(info.cdpUrl, { screen, script });
         } catch (e) {
-          throw new LaunchError(`Không đặt được màn hình giả: ${e instanceof Error ? e.message : String(e)}`);
+          const what = screen ? 'màn hình giả' : 'WebRTC giả';
+          throw new LaunchError(`Không đặt được ${what}: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
       // Mọi bước có thể lỗi phải xong trước khi đăng ký chạy, để catch dọn đúng.

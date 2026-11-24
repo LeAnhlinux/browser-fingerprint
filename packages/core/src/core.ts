@@ -272,6 +272,11 @@ export class Core extends EventEmitter {
       profilesDir: this.profilesDir,
       secrets: this.secrets,
       extensionDirs: (id) => this.extensionDirsFor(id),
+      // Tra IP proxy lúc mở hồ sơ bằng cùng dịch vụ tra IP với nút "Kiểm tra", hạn ngắn hơn để mở hồ sơ không chờ lâu.
+      lookupExitIp: async (u) => {
+        const r = opts.proxyCheck ? await opts.proxyCheck(u) : await runProxyCheck(u, { lookupUrl: opts.lookupUrl, timeoutMs: 5000 });
+        return r.ok ? r.ip : null;
+      },
       ...opts.launcherOverrides,
     });
     this.launcher.on('change', (id: string) => this.emit('change', id));

@@ -12,7 +12,10 @@ export interface Upstream {
 
 export function upstreamUrl(u: Upstream): string {
   const auth = u.username ? `${encodeURIComponent(u.username)}:${encodeURIComponent(u.password ?? '')}@` : '';
-  return `${u.protocol}://${auth}${u.host}:${u.port}`;
+  // "socks5h" để proxy tự phân giải tên miền. Với "socks5", thư viện chuyển tiếp trang http:// tự tra DNS trên máy,
+  // làm lộ tên miền đang truy cập cho DNS của nhà mạng.
+  const scheme = u.protocol === 'socks5' ? 'socks5h' : u.protocol;
+  return `${scheme}://${auth}${u.host}:${u.port}`;
 }
 
 export class ProxyBridge {

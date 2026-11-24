@@ -12,6 +12,7 @@ export * from './cdp';
 export * from './cookie-parse';
 export * from './crx';
 export * from './extension-files';
-export * from './screen-keeper';
+export * from './page-keeper';
+export * from './webrtc-spoof';
 export * from './fingerprint-probe';
 export * from './capmonster';

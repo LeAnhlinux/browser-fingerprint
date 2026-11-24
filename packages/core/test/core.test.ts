@@ -352,3 +352,34 @@ describe('Core', () => {
     expect(count).toBe(0);
   });
 });
+
+describe('Core: WebRTC hiện IP proxy', () => {
+  it('lúc mở hồ sơ, tra IP proxy bằng cùng bộ kiểm tra proxy và đưa IP đó vào script giả WebRTC', async () => {
+    const checked: unknown[] = [];
+    const scripts: (string | null)[] = [];
+    const c = new Core({
+      dataDir: mkdtempSync(join(tmpdir(), 'bf-core-rtc-')),
+      secrets: { encrypt: (s) => `enc:${s}`, decrypt: (s) => s.replace(/^enc:/, '') },
+      proxyCheck: async (u) => {
+        checked.push(u);
+        return { ok: true, ip: '198.51.100.3', country: 'DE', timezone: 'Europe/Berlin', error: null, ms: 1, rateLimited: false };
+      },
+      launcherOverrides: {
+        engine: { executablePath: () => '/engine/chrome', release: () => ({ version: '1.2.3' }) },
+        spawnImpl,
+        closeBrowser: async () => { throw new Error('no cdp'); },
+        checkReachable: async () => {},
+        openBridge: async () => ({ url: 'http://127.0.0.1:5555', close: async () => {} }),
+        keepPages: async (_url, spec) => { scripts.push(spec.script); return { close: () => {} }; },
+      },
+    });
+    await c.init();
+    const x = c.createProxy({ protocol: 'http', host: 'proxy.example', port: 8080, username: 'u', password: 'p' });
+    const p = c.createProfile({ name: 'a', proxyId: x.id });
+    await c.launch(p.id);
+    expect(checked).toEqual([{ protocol: 'http', host: 'proxy.example', port: 8080, username: 'u', password: 'p' }]);
+    expect(scripts).toHaveLength(1);
+    expect(scripts[0]).toContain('const IP = "198.51.100.3";');
+    await c.shutdown();
+  });
+});

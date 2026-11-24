@@ -1,10 +1,16 @@
 import type { ScreenSpec } from './fingerprint';
 
-export interface ScreenKeeper {
+export interface PageKeeper {
   close(): void;
 }
 
-export interface ScreenKeeperOptions {
+/** Những gì cần áp cho mọi tab: màn hình giả và/hoặc một script chạy trước script của trang. */
+export interface PageSpec {
+  screen: ScreenSpec | null;
+  script: string | null;
+}
+
+export interface PageKeeperOptions {
   timeoutMs?: number;
   WebSocketImpl?: new (url: string) => WebSocket;
 }
@@ -12,11 +18,11 @@ export interface ScreenKeeperOptions {
 type Msg = { id?: number; method?: string; params?: Record<string, unknown>; sessionId?: string; error?: unknown };
 
 /**
- * Giữ một kết nối CDP suốt lúc hồ sơ chạy để mọi tab nhận màn hình giả.
- * Nhân tự gắn phiên này vào từng tab mới và tạm dừng tab đến khi ta đặt xong màn hình,
- * nên cả script chạy sớm nhất của trang cũng chỉ thấy màn hình giả.
+ * Giữ một kết nối CDP suốt lúc hồ sơ chạy để mọi tab nhận màn hình giả và script giả lập.
+ * Nhân tự gắn phiên này vào từng tab và iframe mới, tạm dừng nó đến khi ta cài xong,
+ * nên cả script chạy sớm nhất của trang cũng chỉ thấy bản giả.
  */
-export function startScreenKeeper(cdpUrl: string, screen: ScreenSpec, opts: ScreenKeeperOptions = {}): Promise<ScreenKeeper> {
+export function startPageKeeper(cdpUrl: string, spec: PageSpec, opts: PageKeeperOptions = {}): Promise<PageKeeper> {
   const Ws = opts.WebSocketImpl ?? WebSocket;
   const timeoutMs = opts.timeoutMs ?? 5000;
   return new Promise((resolve, reject) => {
@@ -46,22 +52,28 @@ export function startScreenKeeper(cdpUrl: string, screen: ScreenSpec, opts: Scre
       }
       reject(new Error(message));
     };
-    const timer = setTimeout(() => fail('Hết thời gian đặt màn hình giả'), timeoutMs);
+    const timer = setTimeout(() => fail('Hết thời gian gắn vào tab'), timeoutMs);
 
-    // Gửi liền ba lệnh, không chờ trả lời từng lệnh: với tab đang tạm dừng, nhân có thể chỉ trả lời
-    // lệnh đặt màn hình sau khi tab chạy tiếp, nên chờ thì tab treo mãi. Nhân xử lý lệnh của một phiên theo thứ tự,
-    // nên màn hình giả vẫn được đặt trước khi tab chạy tiếp.
+    // Gửi liền các lệnh, không chờ trả lời từng lệnh: với tab đang tạm dừng, nhân có thể chỉ trả lời
+    // sau khi tab chạy tiếp, nên chờ thì tab treo mãi. Nhân xử lý lệnh của một phiên theo thứ tự,
+    // nên mọi thứ được cài trước khi tab chạy tiếp.
     const onAttached = (sessionId: string, type: string): void => {
-      if (type === 'page') {
+      const frame = type === 'page' || type === 'iframe';
+      if (type === 'page' && spec.screen) {
+        const s = spec.screen;
         void send(
           'Emulation.setDeviceMetricsOverride',
-          { width: 0, height: 0, deviceScaleFactor: screen.scale, mobile: false, screenWidth: screen.width, screenHeight: screen.height },
+          { width: 0, height: 0, deviceScaleFactor: s.scale, mobile: false, screenWidth: s.width, screenHeight: s.height },
           sessionId,
         );
       }
-      if (type === 'page' || type === 'iframe') {
-        void send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sessionId);
+      if (frame && spec.script) {
+        // Nhân chỉ chạy script này cho trang mới khi miền Page đã bật (đo trên nhân thật: thiếu Page.enable thì script không chạy).
+        // runImmediately: tab đã mở sẵn trước khi gắn (tab đầu tiên) cũng nhận script ngay.
+        void send('Page.enable', {}, sessionId);
+        void send('Page.addScriptToEvaluateOnNewDocument', { source: spec.script, runImmediately: true }, sessionId);
       }
+      if (frame) void send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sessionId);
       void send('Runtime.runIfWaitingForDebugger', {}, sessionId);
     };
 
@@ -84,11 +96,11 @@ export function startScreenKeeper(cdpUrl: string, screen: ScreenSpec, opts: Scre
         onAttached(sessionId, type);
       }
     });
-    ws.addEventListener('error', () => fail('Không kết nối được CDP để đặt màn hình giả'));
+    ws.addEventListener('error', () => fail('Không kết nối được CDP để gắn vào tab'));
     ws.addEventListener('close', () => {
       for (const res of pending.values()) res({ error: 'closed' });
       pending.clear();
-      fail('Mất kết nối CDP khi đặt màn hình giả');
+      fail('Mất kết nối CDP khi gắn vào tab');
     });
     ws.addEventListener('open', () => {
       void send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }).then((r) => {

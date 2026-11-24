@@ -52,6 +52,14 @@ Nếu proxy bị sửa trong lúc đang kiểm tra, lần kiểm tra đó thất
 
 Khi dán danh sách proxy, dòng bắt đầu bằng `#` được coi là chú thích và bị bỏ qua; dòng dài hơn 2048 ký tự bị từ chối. Nếu dịch vụ tra IP trả HTTP 429 (giới hạn tốc độ), app báo đúng như vậy và không ghi đè kết quả kiểm tra trước đó của proxy.
 
+## WebRTC và DNS khi dùng proxy
+
+Nhân chặn mọi kết nối UDP không đi qua proxy, nên WebRTC thật không lộ được IP thật hay IP nội bộ. Để trang thấy giống Chrome thường đứng sau proxy, app tra IP ra ngoài của proxy lúc mở hồ sơ (cùng dịch vụ tra IP ở trên, hạn 5 giây, chạy song song lúc nhân khởi động; không tra được thì dùng IP của lần kiểm tra gần nhất), rồi qua kết nối CDP chèn một script vào mọi tab và iframe trước script của trang (`packages/core/src/webrtc-spoof.ts`). Script bọc `RTCPeerConnection`: trang thấy một ứng viên `host` dạng mDNS (`xxxx.local`), và khi có cấu hình máy chủ STUN/TURN thì thêm ứng viên `srflx` mang IP proxy; SDP của `localDescription` khớp theo. Các hàm bị bọc trả `toString()` như hàm gốc.
+
+Giới hạn: không có kết nối WebRTC thật nào, nên gọi video P2P không chạy (dịch vụ có TURN qua TCP vẫn có thể chạy qua proxy); sự kiện ứng viên giả có `isTrusted` là `false`; `getStats()` không có ứng viên giả; trang thử kết nối STUN thật rồi chờ phản hồi có thể nhận ra.
+
+DNS: nhân chuyển nguyên tên miền cho proxy, không tự phân giải (đã kiểm bằng net-log). Cầu proxy gửi địa chỉ dạng `socks5h://` cho proxy SOCKS5 để proxy tự phân giải cả với trang `http://`.
+
 ## Cookie và extension
 
 **Nhập cookie.** Bấm nút "Cookie" trên dòng hồ sơ, rồi dán JSON (kiểu xuất của các extension quản lý cookie) hoặc nội dung Netscape `cookies.txt`, hoặc chọn file. Giới hạn 5 MB và 10.000 cookie mỗi lần nhập.

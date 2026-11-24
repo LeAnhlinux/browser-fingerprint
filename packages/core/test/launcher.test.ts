@@ -49,6 +49,7 @@ beforeEach(() => {
     spawnImpl: sp.impl,
     openBridge: async () => ({ url: 'http://127.0.0.1:5555', close: async () => { bridgeClosed++; } }),
     checkReachable: async () => {},
+    lookupExitIp: async () => null,
     closeBrowser: async () => { throw new Error('không có CDP thật'); },
     cdpTimeoutMs: 500,
     windowWatchMs: 0,
@@ -384,7 +385,7 @@ describe('Launcher: màn hình giả', () => {
   it('có màn hình thì thêm cờ, giữ màn hình qua CDP; không có thì không', async () => {
     const kept: { url: string; screen: unknown }[] = [];
     let closed = 0;
-    const l = new Launcher({ ...deps, keepScreen: async (url, screen) => { kept.push({ url, screen }); return { close: () => { closed++; } }; } });
+    const l = new Launcher({ ...deps, keepPages: async (url, { screen }) => { kept.push({ url, screen }); return { close: () => { closed++; } }; } });
     const plain = store.createProfile({ name: 'a' });
     await l.launch(plain.id);
     expect(sp.calls[0].args.some((a) => a.includes('site-isolation'))).toBe(false);
@@ -403,9 +404,98 @@ describe('Launcher: màn hình giả', () => {
 
   it('không giữ được màn hình giả thì không chạy (không để lộ màn hình thật)', async () => {
     const p = store.createProfile({ name: 'b', screenWidth: 1920, screenHeight: 1080 });
-    const l = new Launcher({ ...deps, keepScreen: async () => { throw new Error('hỏng'); } });
+    const l = new Launcher({ ...deps, keepPages: async () => { throw new Error('hỏng'); } });
     await expect(l.launch(p.id)).rejects.toThrow('Không đặt được màn hình giả: hỏng');
     expect(sp.calls[0].child.killed).toBe(true);
     expect(l.isActive(p.id)).toBe(false);
+  });
+});
+
+describe('Launcher: WebRTC hiện IP proxy', () => {
+  function keeperSpy() {
+    const specs: { screen: unknown; script: string | null }[] = [];
+    let closed = 0;
+    return {
+      specs,
+      closed: () => closed,
+      keepPages: async (_url: string, spec: { screen: unknown; script: string | null }) => {
+        specs.push(spec);
+        return { close: () => { closed++; } };
+      },
+    };
+  }
+
+  it('tra IP qua đúng proxy (kèm mật khẩu đã giải mã) rồi cài script giả WebRTC với IP đó', async () => {
+    const k = keeperSpy();
+    const looked: unknown[] = [];
+    const x = store.createProxy({ protocol: 'socks5', host: '9.9.9.9', port: 1080, username: 'u', passwordEncrypted: 'enc:secret' });
+    const p = store.createProfile({ name: 'a', proxyId: x.id });
+    const l = new Launcher({ ...deps, keepPages: k.keepPages, lookupExitIp: async (u) => { looked.push(u); return '198.51.100.9'; } });
+    await l.launch(p.id);
+    expect(looked).toEqual([{ protocol: 'socks5', host: '9.9.9.9', port: 1080, username: 'u', password: 'secret' }]);
+    expect(k.specs).toHaveLength(1);
+    expect(k.specs[0].screen).toBeNull();
+    expect(k.specs[0].script).toContain('const IP = "198.51.100.9";');
+    await l.stop(p.id);
+    expect(k.closed()).toBe(1);
+  });
+
+  it('tra không được thì dùng IP của lần kiểm tra gần nhất', async () => {
+    const k = keeperSpy();
+    const x = store.createProxy({ protocol: 'http', host: '9.9.9.9', port: 8080, username: null, passwordEncrypted: null });
+    store.saveProxyCheck(x.id, { ok: true, ip: '192.0.2.44', country: 'US', timezone: 'America/New_York', error: null });
+    const p = store.createProfile({ name: 'a', proxyId: x.id });
+    const l = new Launcher({ ...deps, keepPages: k.keepPages, lookupExitIp: async () => { throw new Error('hết giờ'); } });
+    await l.launch(p.id);
+    expect(k.specs[0].script).toContain('"192.0.2.44"');
+  });
+
+  it('dịch vụ tra IP trả giá trị lạ thì không dùng nó', async () => {
+    const k = keeperSpy();
+    const x = store.createProxy({ protocol: 'http', host: '9.9.9.9', port: 8080, username: null, passwordEncrypted: null });
+    const p = store.createProfile({ name: 'a', proxyId: x.id });
+    const l = new Launcher({ ...deps, keepPages: k.keepPages, lookupExitIp: async () => '"; alert(1); "' });
+    await l.launch(p.id);
+    expect(k.specs).toHaveLength(0);
+    expect(l.isActive(p.id)).toBe(true);
+  });
+
+  it('không có IP nào thì vẫn mở hồ sơ, không giả WebRTC (nhân vẫn chặn UDP)', async () => {
+    const k = keeperSpy();
+    const x = store.createProxy({ protocol: 'http', host: '9.9.9.9', port: 8080, username: null, passwordEncrypted: null });
+    const p = store.createProfile({ name: 'a', proxyId: x.id });
+    const l = new Launcher({ ...deps, keepPages: k.keepPages });
+    await l.launch(p.id);
+    expect(k.specs).toHaveLength(0);
+  });
+
+  it('hồ sơ không có proxy thì không tra IP, không giả WebRTC', async () => {
+    const k = keeperSpy();
+    let looked = 0;
+    const p = store.createProfile({ name: 'a' });
+    const l = new Launcher({ ...deps, keepPages: k.keepPages, lookupExitIp: async () => { looked++; return '1.1.1.1'; } });
+    await l.launch(p.id);
+    expect(looked).toBe(0);
+    expect(k.specs).toHaveLength(0);
+  });
+
+  it('có cả màn hình giả và proxy thì cài cả hai trong cùng một kết nối', async () => {
+    const k = keeperSpy();
+    const x = store.createProxy({ protocol: 'http', host: '9.9.9.9', port: 8080, username: null, passwordEncrypted: null });
+    const p = store.createProfile({ name: 'a', proxyId: x.id, screenWidth: 1920, screenHeight: 1080 });
+    const l = new Launcher({ ...deps, keepPages: k.keepPages, lookupExitIp: async () => '2001:db8::1' });
+    await l.launch(p.id);
+    expect(k.specs).toHaveLength(1);
+    expect(k.specs[0].screen).toEqual({ width: 1920, height: 1080, scale: 1 });
+    expect(k.specs[0].script).toContain('"2001:db8::1"');
+  });
+
+  it('không gắn được vào tab để giả WebRTC thì không chạy', async () => {
+    const x = store.createProxy({ protocol: 'http', host: '9.9.9.9', port: 8080, username: null, passwordEncrypted: null });
+    const p = store.createProfile({ name: 'a', proxyId: x.id });
+    const l = new Launcher({ ...deps, keepPages: async () => { throw new Error('hỏng'); }, lookupExitIp: async () => '1.2.3.4' });
+    await expect(l.launch(p.id)).rejects.toThrow('Không đặt được WebRTC giả: hỏng');
+    expect(sp.calls[0].child.killed).toBe(true);
+    expect(bridgeClosed).toBe(1);
   });
 });

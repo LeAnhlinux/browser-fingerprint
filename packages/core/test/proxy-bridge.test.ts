@@ -1,5 +1,5 @@
 import http from 'node:http';
-import type { AddressInfo } from 'node:net';
+import net, { type AddressInfo } from 'node:net';
 import { Server as ProxyServer } from 'proxy-chain';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ProxyBridge, assertReachable, upstreamUrl } from '../src/proxy-bridge';
@@ -20,6 +20,63 @@ function getVia(proxyPort: number, url: string): Promise<{ status: number; body:
     req.on('error', reject);
     req.end();
   });
+}
+
+function connectVia(proxyPort: number, authority: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: proxyPort, method: 'CONNECT', path: authority });
+    req.on('connect', (res, socket) => {
+      socket.destroy();
+      resolve(res.statusCode ?? 0);
+    });
+    req.on('response', (res) => resolve(res.statusCode ?? 0));
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+/** Máy chủ SOCKS5 tối giản: ghi lại địa chỉ đích được yêu cầu rồi trả lỗi. */
+async function fakeSocks5(): Promise<{ port: number; requests: { atyp: number; host: string }[]; close: () => Promise<void> }> {
+  const requests: { atyp: number; host: string }[] = [];
+  const sockets = new Set<net.Socket>();
+  const server = net.createServer((s) => {
+    sockets.add(s);
+    s.on('close', () => sockets.delete(s));
+    s.on('error', () => {});
+    let buf = Buffer.alloc(0);
+    let greeted = false;
+    s.on('data', (d) => {
+      buf = Buffer.concat([buf, d]);
+      if (!greeted) {
+        if (buf.length < 2 || buf.length < 2 + buf[1]) return;
+        buf = buf.subarray(2 + buf[1]);
+        greeted = true;
+        s.write(Buffer.from([5, 0]));
+      }
+      if (buf.length < 5) return;
+      const atyp = buf[3];
+      let host = '';
+      if (atyp === 3) {
+        if (buf.length < 5 + buf[4] + 2) return;
+        host = buf.subarray(5, 5 + buf[4]).toString();
+      } else if (atyp === 1) {
+        if (buf.length < 10) return;
+        host = [...buf.subarray(4, 8)].join('.');
+      } else host = 'ipv6';
+      requests.push({ atyp, host });
+      s.end(Buffer.from([5, 1, 0, 1, 0, 0, 0, 0, 0, 0]));
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  return {
+    port: (server.address() as AddressInfo).port,
+    requests,
+    close: () =>
+      new Promise<void>((r) => {
+        for (const s of sockets) s.destroy();
+        server.close(() => r());
+      }),
+  };
 }
 
 beforeEach(async () => {
@@ -49,7 +106,7 @@ afterEach(async () => {
 
 describe('ProxyBridge', () => {
   it('upstreamUrl mã hoá ký tự đặc biệt trong tài khoản', () => {
-    expect(upstreamUrl({ protocol: 'socks5', host: 'h', port: 1080, username: 'u@x', password: 'p:1' })).toBe('socks5://u%40x:p%3A1@h:1080');
+    expect(upstreamUrl({ protocol: 'socks5', host: 'h', port: 1080, username: 'u@x', password: 'p:1' })).toBe('socks5h://u%40x:p%3A1@h:1080');
     expect(upstreamUrl({ protocol: 'http', host: 'h', port: 8080, username: null, password: null })).toBe('http://h:8080');
   });
 
@@ -69,6 +126,18 @@ describe('ProxyBridge', () => {
     expect(res.status).toBeGreaterThanOrEqual(500);
     expect(targetHits).toBe(0);
     await bridge.close();
+  });
+
+  it.each([
+    ['http://', (port: number) => getVia(port, 'http://khong-duoc-tra-dns.invalid/')],
+    ['https:// (CONNECT)', (port: number) => connectVia(port, 'khong-duoc-tra-dns.invalid:443')],
+  ])('proxy SOCKS5: tên miền của trang %s được gửi nguyên cho proxy, máy không tự tra DNS', async (_label, request) => {
+    const socks = await fakeSocks5();
+    const bridge = await ProxyBridge.open({ protocol: 'socks5', host: '127.0.0.1', port: socks.port, username: null, password: null });
+    await request(bridge.port).catch(() => {});
+    expect(socks.requests).toEqual([{ atyp: 3, host: 'khong-duoc-tra-dns.invalid' }]);
+    await bridge.close();
+    await socks.close();
   });
 
   it('assertReachable: resolve với cổng mở, reject với cổng đóng', async () => {

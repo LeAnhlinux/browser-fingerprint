@@ -146,6 +146,8 @@ Cột **Trạng thái** cho biết:
 
 - Đóng cửa sổ cuối cùng của hồ sơ (hoặc tab cuối cùng) cũng là dừng hồ sơ, trên cả macOS lẫn Windows. Trên macOS app mất khoảng 2 giây để nhận ra rồi tự dừng.
 - **Proxy chết thì hồ sơ không mở**, và app báo proxy nào không kết nối được. App không bao giờ tự chuyển sang kết nối trực tiếp, để IP thật của bạn không bị lộ.
+- **WebRTC hiện IP của proxy.** Lúc mở hồ sơ có proxy, app tra IP của proxy (qua chính proxy đó) rồi cho WebRTC báo đúng IP này, giống một trình duyệt Chrome thường đứng sau proxy. IP thật và IP mạng nội bộ không bao giờ lộ ra qua WebRTC. Nếu không tra được IP, app dùng IP của lần kiểm tra proxy gần nhất; không có cả hai thì WebRTC không báo IP nào. Với proxy xoay IP, WebRTC giữ IP của lúc mở hồ sơ.
+- **DNS đi qua proxy.** Tên miền bạn truy cập được proxy phân giải, máy bạn không tự hỏi DNS của nhà mạng.
 - Mỗi hồ sơ chỉ mở được một lần một lúc. Nhiều hồ sơ khác nhau thì mở cùng lúc thoải mái.
 - Thoát app sẽ dừng mọi hồ sơ đang chạy.
 
