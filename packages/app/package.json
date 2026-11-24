@@ -1,6 +1,7 @@
 {
   "name": "@bf/app",
   "version": "1.0.0",
+  "license": "MIT",
   "productName": "Browser Fingerprint",
   "description": "Trình quản lý hồ sơ trình duyệt tách biệt (antidetect) dùng cá nhân",
   "main": "./out/main/index.js",

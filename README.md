@@ -135,3 +135,7 @@ Giới hạn: không có HTTPS (chỉ nghe trên 127.0.0.1), một token cho m�
 - Giai đoạn 2 (tạo hồ sơ hàng loạt, nhập danh sách proxy, kiểm tra proxy, múi giờ và ngôn ngữ theo proxy) đã xây dựng xong. Giai đoạn 3 (nhập và xuất cookie, thư viện extension gán theo nhóm hoặc theo hồ sơ) và giai đoạn 4 (API cục bộ, CLI, MCP) cũng đã xong.
 
 Việc tuân thủ điều khoản dịch vụ của từng nền tảng là trách nhiệm của người dùng.
+
+## Giấy phép
+
+Mã nguồn trong repo này phát hành theo giấy phép [MIT](LICENSE). Nhân trình duyệt (fingerprint-chromium) không nằm trong repo; app tải nó về từ nơi phát hành của tác giả nhân, và nó theo giấy phép riêng của dự án đó.
