@@ -142,14 +142,17 @@ async function startCore(): Promise<void> {
   })
 
   // Đường dẫn file luôn đến từ hộp thoại của hệ điều hành, không bao giờ từ renderer.
-  ipcMain.handle('bf:addExtension', async (event, kind: unknown) => {
-    assertOwnSender(event)
+  const pickExtensionSource = async (
+    event: IpcMainInvokeEvent,
+    kind: unknown,
+    title: { folder: string; file: string }
+  ): Promise<string | null> => {
     if (kind !== 'folder' && kind !== 'file') throw new Error('Tham số không hợp lệ')
     const options: OpenDialogOptions =
       kind === 'folder'
-        ? { title: 'Chọn thư mục extension đã giải nén', properties: ['openDirectory'] }
+        ? { title: title.folder, properties: ['openDirectory'] }
         : {
-            title: 'Chọn file extension',
+            title: title.file,
             properties: ['openFile'],
             filters: [{ name: 'Extension', extensions: ['crx', 'zip'] }]
           }
@@ -157,8 +160,24 @@ async function startCore(): Promise<void> {
     const picked = win
       ? await dialog.showOpenDialog(win, options)
       : await dialog.showOpenDialog(options)
-    if (picked.canceled || picked.filePaths.length === 0) return null
-    return c.addExtension(picked.filePaths[0])
+    return picked.canceled || picked.filePaths.length === 0 ? null : picked.filePaths[0]
+  }
+  ipcMain.handle('bf:addExtension', async (event, kind: unknown) => {
+    assertOwnSender(event)
+    const path = await pickExtensionSource(event, kind, {
+      folder: 'Chọn thư mục extension đã giải nén',
+      file: 'Chọn file extension'
+    })
+    return path === null ? null : c.addExtension(path)
+  })
+  ipcMain.handle('bf:updateExtension', async (event, id: unknown, kind: unknown) => {
+    assertOwnSender(event)
+    if (typeof id !== 'string') throw new Error('Tham số không hợp lệ')
+    const path = await pickExtensionSource(event, kind, {
+      folder: 'Chọn thư mục bản mới của extension',
+      file: 'Chọn file bản mới của extension (.crx/.zip)'
+    })
+    return path === null ? null : c.updateExtensionFiles(id, path)
   })
 
   // Cookie đi thẳng từ lõi ra file người dùng chọn, không qua renderer.

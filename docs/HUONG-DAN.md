@@ -209,8 +209,14 @@ Trang **Extension** là thư viện dùng chung.
 **Thêm extension:**
 - **Thêm file .crx/.zip…** cho file bạn tải về. File `.crx` giữ đúng ID gốc như trên Chrome Web Store, nên dữ liệu ví gắn theo ID không đổi.
 - **Thêm từ thư mục…** cho extension đã giải nén.
-- App sao chép extension vào thư mục dữ liệu của nó. Sửa thư mục gốc sau đó không có tác dụng; muốn cập nhật thì xoá rồi thêm lại.
+- App sao chép extension vào thư mục dữ liệu của nó. Sửa thư mục gốc sau đó không có tác dụng.
 - App chưa tải được extension thẳng từ Chrome Web Store: bạn tự tải file `.crx` hoặc `.zip` về.
+
+**Cập nhật extension lên bản mới:** tải file `.crx`/`.zip` bản mới về, bấm **Cập nhật** ở dòng của extension rồi chọn file (biểu tượng thư mục bên cạnh để chọn thư mục đã giải nén).
+- App thay file ngay tại chỗ, nên **ID extension giữ nguyên**: dữ liệu của extension trong từng hồ sơ (ví, cài đặt) và việc gán cho nhóm, hồ sơ đều còn nguyên.
+- Dừng các hồ sơ đang dùng extension đó trước khi cập nhật. Hồ sơ nhận bản mới từ lần mở sau.
+- Nếu file `.crx` là của một extension khác (khác ID), app từ chối để tránh thay nhầm.
+- **Đừng xoá rồi thêm lại** để cập nhật: extension thêm từ `.zip` hoặc thư mục sẽ nhận ID mới, và dữ liệu ví cũ trong các hồ sơ không còn gắn với nó nữa.
 
 **Gán extension:**
 - Cho **một hồ sơ:** trong bảng chi tiết của hồ sơ, tick extension ở phần **Extension**.

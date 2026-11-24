@@ -64,7 +64,9 @@ Nếu hồ sơ chưa chạy, app tự mở ẩn hồ sơ qua đúng proxy của 
 
 App sao chép extension vào thư mục dữ liệu của mình và không kiểm tra chữ ký của file `.crx`, nên chỉ thêm extension từ nguồn bạn tin. File `.crx` giữ nguyên ID gốc của extension, vì vậy dữ liệu (ví dụ ví tiền mã hoá) gắn theo ID không bị đổi.
 
-Giới hạn: chưa tải extension thẳng từ Chrome Web Store, chưa tự cập nhật extension, chưa thử trên Windows.
+**Cập nhật extension.** Nút "Cập nhật" ở trang Extension nhận file `.crx`/`.zip` hoặc thư mục bản mới và thay file ngay trong thư mục cũ của extension. Đường dẫn không đổi, và app gắn lại khoá (`key`) cũ vào manifest (hoặc bỏ khoá của bản mới nếu bản cũ không có), nên ID extension, dữ liệu của nó trong từng hồ sơ và việc gán đều giữ nguyên. File `.crx` mang khoá khác khoá cũ bị từ chối. Không cập nhật được khi có hồ sơ đang chạy dùng extension đó; trong lúc thay file, hồ sơ dùng nó chưa mở được.
+
+Giới hạn: chưa tải extension thẳng từ Chrome Web Store, chưa tự kiểm tra bản mới của extension, chưa thử trên Windows.
 
 ## API cục bộ, CLI và MCP
 

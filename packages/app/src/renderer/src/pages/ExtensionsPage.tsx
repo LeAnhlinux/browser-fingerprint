@@ -1,5 +1,11 @@
 import type { Extension, Group } from '@bf/core'
-import { IconFileZip, IconFolderOpen, IconPuzzle, IconTrash } from '@tabler/icons-react'
+import {
+  IconFileZip,
+  IconFolderOpen,
+  IconPuzzle,
+  IconRefresh,
+  IconTrash
+} from '@tabler/icons-react'
 import { useRef, useState } from 'react'
 import { api, cleanError } from '../api'
 import { Banner } from '../ui'
@@ -38,6 +44,17 @@ export function ExtensionsPage({ extensions, groups, groupExtensions }: Props): 
       if (ext) setNotice(`Đã thêm "${ext.name}" ${ext.version}.`)
     })
 
+  const update = (ext: Extension, kind: 'folder' | 'file'): Promise<void> =>
+    guarded(async () => {
+      const r = await api.updateExtension(ext.id, kind)
+      if (!r) return
+      const { before, after } = r
+      const renamed = before.name !== after.name ? ` (giờ tên là "${after.name}")` : ''
+      setNotice(
+        `Đã cập nhật "${before.name}" từ ${before.version} lên ${after.version}${renamed}. Dữ liệu của extension trong các hồ sơ được giữ nguyên.`
+      )
+    })
+
   const remove = (ext: Extension): void => {
     if (
       !window.confirm(
@@ -71,7 +88,8 @@ export function ExtensionsPage({ extensions, groups, groupExtensions }: Props): 
       </div>
       <p className="page-sub">
         Thư viện extension dùng chung. Gán riêng cho một hồ sơ trong bảng chi tiết của hồ sơ, hoặc
-        cho cả nhóm ở dưới. Có hiệu lực từ lần khởi động sau.
+        cho cả nhóm ở dưới. Có hiệu lực từ lần khởi động sau. Lên bản mới bằng nút cập nhật ở mỗi
+        dòng (giữ nguyên dữ liệu ví trong hồ sơ), đừng xoá rồi thêm lại.
       </p>
 
       {error && (
@@ -110,6 +128,25 @@ export function ExtensionsPage({ extensions, groups, groupExtensions }: Props): 
                   <td className="cell-title">{ext.name}</td>
                   <td className="mono">{ext.version}</td>
                   <td className="col-actions">
+                    <button
+                      className="btn sm"
+                      title="Cập nhật từ file .crx/.zip bản mới"
+                      aria-label={`Cập nhật ${ext.name} từ file`}
+                      disabled={busy}
+                      onClick={() => void update(ext, 'file')}
+                    >
+                      <IconRefresh size={14} />
+                      Cập nhật
+                    </button>
+                    <button
+                      className="icon-btn"
+                      title="Cập nhật từ thư mục bản mới"
+                      aria-label={`Cập nhật ${ext.name} từ thư mục`}
+                      disabled={busy}
+                      onClick={() => void update(ext, 'folder')}
+                    >
+                      <IconFolderOpen size={16} />
+                    </button>
                     <button
                       className="icon-btn danger"
                       title="Xoá"

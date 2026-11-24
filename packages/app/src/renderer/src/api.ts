@@ -43,6 +43,8 @@ export const api = {
   addExtension: (kind: 'folder' | 'file') =>
     window.bf.addExtension(kind) as Promise<Extension | null>,
   deleteExtension: (id: string) => call<void>('deleteExtension', id),
+  updateExtension: (id: string, kind: 'folder' | 'file') =>
+    window.bf.updateExtension(id, kind) as Promise<{ before: Extension; after: Extension } | null>,
   setProfileExtensions: (id: string, extensionIds: string[]) =>
     call<void>('setProfileExtensions', id, extensionIds),
   setGroupExtensions: (groupId: string, extensionIds: string[]) =>

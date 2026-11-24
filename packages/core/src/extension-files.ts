@@ -163,3 +163,26 @@ export async function installExtensionFiles(source: string, destDir: string, lim
   }
   return readMeta(destDir, publicKey);
 }
+
+async function readManifest(dir: string): Promise<Record<string, unknown>> {
+  const manifest: unknown = JSON.parse((await readFile(join(dir, 'manifest.json'), 'utf8')).replace(/^\uFEFF/, ''));
+  if (!isRecord(manifest)) throw new Error('manifest.json không hợp lệ');
+  return manifest;
+}
+
+/** Khoá công khai trong manifest (quyết định ID của extension), hoặc null khi ID tính theo đường dẫn thư mục. */
+export async function readManifestKey(dir: string): Promise<string | null> {
+  const manifest = await readManifest(dir);
+  return typeof manifest.key === 'string' && manifest.key !== '' ? manifest.key : null;
+}
+
+/** Đặt (hoặc bỏ) khoá trong manifest để giữ đúng ID cũ của extension khi thay file. */
+export async function setManifestKey(dir: string, key: string | null): Promise<void> {
+  const manifest = await readManifest(dir);
+  const current = typeof manifest.key === 'string' && manifest.key !== '' ? manifest.key : null;
+  if (current === key) return;
+  if (key === null) delete manifest.key;
+  else manifest.key = key;
+  await writeFile(join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+}
+

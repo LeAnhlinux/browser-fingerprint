@@ -6,6 +6,8 @@ const bf = {
   installEngine: (): Promise<void> => ipcRenderer.invoke('bf:installEngine'),
   addExtension: (kind: 'folder' | 'file'): Promise<unknown> =>
     ipcRenderer.invoke('bf:addExtension', kind),
+  updateExtension: (id: string, kind: 'folder' | 'file'): Promise<unknown> =>
+    ipcRenderer.invoke('bf:updateExtension', id, kind),
   exportCookies: (profileId: string): Promise<unknown> =>
     ipcRenderer.invoke('bf:exportCookies', profileId),
   apiStatus: (): Promise<unknown> => ipcRenderer.invoke('bf:apiStatus'),

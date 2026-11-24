@@ -17,7 +17,7 @@ import {
 import { CdpError, type CdpSession, openCdp } from './cdp';
 import { type CdpCookie, type CookieParam, cookieKey, parseCookies, toExportCookies } from './cookie-parse';
 import { EngineManager, type EngineOptions } from './engine';
-import { installExtensionFiles } from './extension-files';
+import { installExtensionFiles, readManifestKey, setManifestKey } from './extension-files';
 import { fingerprintArgs, fingerprintKey, hostPlatform, randomSeed } from './fingerprint';
 import { type ProbeResult, probeFingerprint } from './fingerprint-probe';
 import { LaunchError, Launcher, type LauncherDeps, type RunInfo } from './launcher';
@@ -248,6 +248,8 @@ export class Core extends EventEmitter {
   private capmonsterDownload: (destFile: string) => Promise<void>;
   private capmonsterInstalling: Promise<Extension> | null = null;
   private capmonsterSolving = 0;
+  /** Extension đang được thay file: hồ sơ dùng chúng chưa được mở. */
+  private extensionsBusy = new Set<string>();
 
   constructor(opts: CoreOptions) {
     super();
@@ -666,6 +668,9 @@ export class Core extends EventEmitter {
     for (const e of this.store.extensionsForProfile(profileId)) {
       // Luôn tính đường dẫn từ mã extension, không tin cột path trong DB.
       const dir = join(this.extensionsDir, e.id);
+      if (this.extensionsBusy.has(e.id)) {
+        throw new LaunchError(`Đang cập nhật extension "${e.name}". Hãy mở lại hồ sơ sau giây lát.`);
+      }
       const capmonster = await isCapMonsterExtension(dir, e.name);
       if (capmonster && this.capmonsterInstalling) {
         throw new LaunchError('Đang cài hoặc cập nhật extension CapMonster. Hãy mở lại hồ sơ sau giây lát.');
@@ -780,22 +785,7 @@ export class Core extends EventEmitter {
       await this.capmonsterDownload(zip);
       const meta = await installExtensionFiles(zip, work);
       if (!(await isCapMonsterExtension(work, meta.name))) throw new Error('File tải về không phải extension CapMonster');
-      if (existing) {
-        this.assertExtensionIdle(existing);
-        const dir = join(this.extensionsDir, existing.id);
-        const old = `${dir}.old-${randomUUID()}`;
-        await rename(dir, old);
-        try {
-          await rename(work, dir);
-        } catch (err) {
-          await rename(old, dir).catch(() => {});
-          throw err;
-        }
-        await rm(old, { recursive: true, force: true }).catch(() => {});
-        this.store.updateExtension(existing.id, { name: meta.name, version: meta.version });
-        this.emit('change', '');
-        return this.store.getExtension(existing.id)!;
-      }
+      if (existing) return await this.replaceExtensionDir(existing, work, meta);
       const id = randomUUID();
       const dir = join(this.extensionsDir, id);
       await rename(work, dir);
@@ -810,6 +800,60 @@ export class Core extends EventEmitter {
       return ext;
     } finally {
       await rm(zip, { force: true }).catch(() => {});
+      await rm(work, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+
+  /**
+   * Thay toàn bộ file của extension bằng thư mục work, ngay tại thư mục cũ: đường dẫn (và khoá trong manifest) giữ nguyên
+   * nên ID extension, dữ liệu của nó trong từng hồ sơ và việc gán cho nhóm/hồ sơ đều còn.
+   */
+  private async replaceExtensionDir(existing: Extension, work: string, meta: { name: string; version: string }): Promise<Extension> {
+    this.assertExtensionIdle(existing);
+    this.extensionsBusy.add(existing.id);
+    try {
+      const dir = join(this.extensionsDir, existing.id);
+      // Bản mới không mang khoá (zip, thư mục) thì gắn khoá cũ; bản cũ không có khoá thì bỏ khoá của bản mới: ID không đổi.
+      const oldKey = existsSync(join(dir, 'manifest.json')) ? await readManifestKey(dir).catch(() => null) : null;
+      await setManifestKey(work, oldKey);
+      const old = `${dir}.old-${randomUUID()}`;
+      await rename(dir, old);
+      try {
+        await rename(work, dir);
+      } catch (err) {
+        await rename(old, dir).catch(() => {});
+        throw err;
+      }
+      await rm(old, { recursive: true, force: true }).catch(() => {});
+      this.store.updateExtension(existing.id, { name: meta.name, version: meta.version });
+    } finally {
+      this.extensionsBusy.delete(existing.id);
+      this.emit('change', '');
+    }
+    return this.store.getExtension(existing.id)!;
+  }
+
+  /**
+   * Cập nhật một extension bằng bản mới (file .crx/.zip hoặc thư mục). Chỉ gọi từ tiến trình main sau hộp thoại chọn file.
+   * Giữ nguyên ID: file .crx của một extension khác (khoá khác) bị từ chối.
+   */
+  async updateExtensionFiles(id: string, sourcePath: string): Promise<{ before: Extension; after: Extension }> {
+    if (typeof id !== 'string' || typeof sourcePath !== 'string' || sourcePath === '') throw new Error(BAD_ARGS);
+    const before = this.store.getExtension(id);
+    if (!before) throw new Error('Không tìm thấy extension');
+    if (this.extensionsBusy.has(id)) throw new Error('Extension này đang được cập nhật');
+    this.assertExtensionIdle(before);
+    const dir = join(this.extensionsDir, id);
+    const work = join(this.extensionsDir, `.update-${randomUUID()}`);
+    try {
+      const meta = await installExtensionFiles(sourcePath, work);
+      const oldKey = existsSync(join(dir, 'manifest.json')) ? await readManifestKey(dir).catch(() => null) : null;
+      const newKey = await readManifestKey(work);
+      if (oldKey && newKey && oldKey !== newKey) {
+        throw new Error('File này là một extension khác (khác ID). Hãy thêm nó như một extension mới.');
+      }
+      return { before, after: await this.replaceExtensionDir(before, work, meta) };
+    } finally {
       await rm(work, { recursive: true, force: true }).catch(() => {});
     }
   }
